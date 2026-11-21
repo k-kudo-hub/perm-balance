@@ -23,6 +23,8 @@ export function applyPatches<T>(config: T, patches: Patch[]): T {
 	for (const patch of patches) {
 		const last = patch.path.at(-1);
 		if (last === undefined) continue;
+		// Adding nothing is a no-op; never create an empty array (an empty allow list can block everything)
+		if (patch.op === "add-to-array" && patch.values.length === 0) continue;
 		if (patch.op === "delete" || patch.op === "remove-from-array") {
 			// Removals never create missing levels
 			const existing = patch.path

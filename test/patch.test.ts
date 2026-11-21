@@ -61,4 +61,14 @@ describe("applyPatches", () => {
 		]);
 		expect(result).toEqual({ a: 1 });
 	});
+	it("does not create an empty array when adding nothing", () => {
+		const result = applyPatches({}, [
+			{
+				op: "add-to-array",
+				path: ["sandbox", "network", "allowedDomains"],
+				values: [],
+			},
+		]);
+		expect(result).toEqual({});
+	});
 });
