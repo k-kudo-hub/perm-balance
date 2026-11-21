@@ -307,3 +307,25 @@ describe("comparing network scope when both are set", () => {
 		expect(p.default_permissions).toBeUndefined();
 	});
 });
+
+describe("[features.network_proxy] as a table", () => {
+	it("treats enabled = true in the table as the proxy being on", () => {
+		const toml =
+			'[features.network_proxy]\nenabled = true\n[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"api.openai.com" = "allow"\n';
+		expect(check(toml).findings).toEqual([]);
+	});
+
+	it("treats a table without enabled = true as the proxy being off", () => {
+		const toml =
+			'[features.network_proxy]\nproxy_url = "http://127.0.0.1:3128"\n[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"api.openai.com" = "allow"\n';
+		expect(check(toml).findings[0]?.ruleId).toBe("codex/network-all");
+	});
+
+	it("turns the proxy on inside the table instead of replacing the table", () => {
+		const toml =
+			'[features.network_proxy]\nproxy_url = "http://127.0.0.1:3128"\n[permissions.dev.network]\nenabled = true\n';
+		expect(proposal(toml).features).toEqual({
+			network_proxy: { proxy_url: "http://127.0.0.1:3128", enabled: true },
+		});
+	});
+});

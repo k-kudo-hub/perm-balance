@@ -71,6 +71,19 @@ function legacyNetwork(config: unknown, sandboxMode: string): boolean {
 	);
 }
 
+/** Whether the network proxy is started: `[features] network_proxy = true`, or `enabled = true` in the `[features.network_proxy]` table */
+function proxyOn(config: unknown): boolean {
+	const proxy = get(config, ["features", "network_proxy"]);
+	return proxy === true || (isObj(proxy) && proxy.enabled === true);
+}
+
+/** Patch that starts the proxy, keeping the other settings when `[features.network_proxy]` is a table */
+function enableProxy(config: unknown): Patch {
+	return isObj(get(config, ["features", "network_proxy"]))
+		? { op: "set", path: ["features", "network_proxy", "enabled"], value: true }
+		: { op: "set", path: ["features", "network_proxy"], value: true };
+}
+
 /** Name for a new profile that does not collide with an existing one */
 function newProfileName(config: unknown): string {
 	return "project" in customProfiles(config) ? "project-narrow" : "project";
@@ -81,13 +94,13 @@ function newProfileName(config: unknown): string {
  * The proxy blocks external traffic when nothing is allowed, so with no candidate domains, turn the network off
  */
 function narrowNetwork(
+	config: unknown,
 	profile: string,
 	ctx: RuleContext,
 	keepDomains: boolean,
 ): Patch[] {
 	const base = ["permissions", profile, "network"];
-	if (keepDomains)
-		return [{ op: "set", path: ["features", "network_proxy"], value: true }];
+	if (keepDomains) return [enableProxy(config)];
 	const domains = networkDomains(ctx.facts);
 	if (domains.length === 0) {
 		return [
@@ -97,7 +110,7 @@ function narrowNetwork(
 	}
 	return [
 		{ op: "set", path: [...base, "enabled"], value: true },
-		{ op: "set", path: ["features", "network_proxy"], value: true },
+		enableProxy(config),
 		{ op: "delete", path: [...base, "domains", "*"] },
 		...domains.map(
 			(d): Patch => ({
@@ -127,7 +140,7 @@ function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 				value: "write",
 			}),
 		),
-		...narrowNetwork(name, ctx, false),
+		...narrowNetwork(config, name, ctx, false),
 	];
 }
 
@@ -180,7 +193,7 @@ function checkProfile(
 		const domains = get(network, ["domains"]);
 		const allowAll = isObj(domains) && domains["*"] === "allow";
 		const hasAllow = isObj(domains) && Object.values(domains).includes("allow");
-		const proxy = get(config, ["features", "network_proxy"]) === true;
+		const proxy = proxyOn(config);
 		// With the proxy on and no "*" allowed, only allowed domains are reachable (none at all if nothing is allowed)
 		if (allowAll || !proxy) {
 			const why = allowAll
@@ -200,7 +213,7 @@ function checkProfile(
 					summary: keepDomains
 						? "Turn on [features] network_proxy so the domain list is enforced"
 						: "Allow only the package registries and Git hosts this project uses, enforced by the proxy (turn the network off if there are none)",
-					patches: narrowNetwork(name, ctx, keepDomains),
+					patches: narrowNetwork(config, name, ctx, keepDomains),
 				},
 			});
 		}
