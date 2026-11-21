@@ -78,10 +78,10 @@ function isSecretName(name: string): boolean {
 	return ["id_rsa", "id_ed25519", "credentials.json"].includes(name);
 }
 
-/** Looks for secret-looking files up to depth 2 */
 /** How many path segments deep secret files are searched for (`.env`, `a/.env`, `a/b/.env`) */
 export const SECRET_SCAN_DEPTH = 3;
 
+/** Looks for secret-looking files up to SECRET_SCAN_DEPTH path segments deep */
 function findSecretFiles(root: string, rel = "", depth = 0): string[] {
 	if (depth >= SECRET_SCAN_DEPTH) return [];
 	let entries: import("node:fs").Dirent[];

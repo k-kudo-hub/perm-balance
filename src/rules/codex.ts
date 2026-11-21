@@ -78,10 +78,51 @@ function grantsWrite(filesystem: unknown): boolean {
 function profileRank(config: unknown, name: string): number {
 	const chain = profileChain(config, name);
 	const base = chain.builtin ? (BUILTIN_RANK[chain.builtin] ?? 0) : 0;
+	// Writing the whole home or root is as broad as having no sandbox for writes
+	const writesHome =
+		chain.profiles.some(
+			(p) => homeWriteEntries(get(p, ["filesystem"])).length > 0,
+		) ||
+		(workspaceRootsWritable(config, name) &&
+			homeWorkspaceRoots(config, name).length > 0);
+	if (writesHome) return 2;
 	const writes = chain.profiles.some((p) =>
 		grantsWrite(get(p, ["filesystem"])),
 	);
 	return writes ? Math.max(base, 1) : base;
+}
+
+/** Filesystem paths that grant `write` on the whole home or root */
+function homeWriteEntries(filesystem: unknown): string[] {
+	if (!isObj(filesystem)) return [];
+	return Object.entries(filesystem)
+		.filter(
+			([path, value]) =>
+				isHomeOrRoot(path) &&
+				(value === "write" || (isObj(value) && value["."] === "write")),
+		)
+		.map(([path]) => path);
+}
+
+/**
+ * Home or root entries in effect in a profile's workspace_roots, inherited through extends
+ * (a child's entry overrides its parent's), with the profile that sets each
+ */
+function homeWorkspaceRoots(
+	config: unknown,
+	name: string,
+): { path: string; owner: string }[] {
+	const chain = profileChain(config, name);
+	const merged = new Map<string, { enabled: unknown; owner: string }>();
+	for (let i = chain.profiles.length - 1; i >= 0; i--) {
+		const roots = get(chain.profiles[i], ["workspace_roots"]);
+		if (!isObj(roots)) continue;
+		for (const [path, enabled] of Object.entries(roots))
+			merged.set(path, { enabled, owner: chain.names[i] ?? name });
+	}
+	return [...merged]
+		.filter(([path, v]) => v.enabled === true && isHomeOrRoot(path))
+		.map(([path, v]) => ({ path, owner: v.owner }));
 }
 
 /** Domain rules in effect for a profile: the parents' rules, overridden by the child's */
@@ -302,13 +343,13 @@ function checkProfile(
 		}
 	}
 
-	const roots = get(profile, ["workspace_roots"]);
-	if (isObj(roots) && workspaceRootsWritable(config, name)) {
-		for (const [path, enabled] of Object.entries(roots)) {
-			if (enabled !== true || !isHomeOrRoot(path)) continue;
+	if (workspaceRootsWritable(config, name)) {
+		for (const { path, owner } of homeWorkspaceRoots(config, name)) {
+			// An inherited entry is reported on the parent when the parent itself can write there
+			if (owner !== name && workspaceRootsWritable(config, owner)) continue;
 			out.push({
 				ruleId: "codex/write-home",
-				setting: `[permissions.${name}.workspace_roots] "${path}" = true`,
+				setting: `[permissions.${owner}.workspace_roots] "${path}" = true`,
 				risk: "high",
 				riskReason:
 					"Makes your home or the root a workspace root, which this profile can write, so it can rewrite shell configs or SSH keys and run code on the next launch",
@@ -320,7 +361,7 @@ function checkProfile(
 					patches: [
 						{
 							op: "delete",
-							path: ["permissions", name, "workspace_roots", path],
+							path: ["permissions", owner, "workspace_roots", path],
 						},
 						...homeWriteCandidates(ctx.facts).map(
 							(dir): Patch => ({
@@ -337,7 +378,10 @@ function checkProfile(
 
 	const network = get(profile, ["network"]);
 	if (!isObj(network)) return out;
-	if (network.enabled === true) {
+	// enabled is inherited through extends. A child that changes nothing about the network repeats its parent, so only
+	// a child that sets enabled or domains itself is checked
+	const ownRules = network.enabled === true || isObj(network.domains);
+	if (ownRules && profileNetwork(config, name)) {
 		// Domain rules are inherited through extends
 		const domains = effectiveDomains(config, name);
 		const allowAll = domains["*"] === "allow";
@@ -590,8 +634,8 @@ export function checkCodexConfig(
 							value: dp === ":read-only" ? ":read-only" : ":workspace",
 						},
 					];
-			// On Linux, WSL and native Windows, an unbounded ** deny pattern needs bounded pre-expansion.
-			// Use the depth perm-balance scans for secret files, and keep a value the user already set
+			// On Linux, WSL and native Windows, an unbounded ** deny pattern may need bounded pre-expansion.
+			// Use the depth perm-balance scans for secret files, and keep a value the user already set (also one inherited from a parent)
 			const depthPath = [
 				"permissions",
 				name,
@@ -599,7 +643,10 @@ export function checkCodexConfig(
 				"glob_scan_max_depth",
 			];
 			const depth: Patch[] =
-				useActive && get(config, depthPath) !== undefined
+				useActive &&
+				profileChain(config, name).profiles.some(
+					(p) => get(p, ["filesystem", "glob_scan_max_depth"]) !== undefined,
+				)
 					? []
 					: [{ op: "set", path: depthPath, value: SECRET_SCAN_DEPTH }];
 			recommendations.push({

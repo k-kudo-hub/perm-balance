@@ -492,3 +492,98 @@ describe("glob_scan_max_depth for deny globs", () => {
 		expect(p.permissions.dev.filesystem.glob_scan_max_depth).toBe(5);
 	});
 });
+
+describe("more rules inherited through extends", () => {
+	it('flags a child that adds "*" = "allow" under a parent that enables the network', () => {
+		const toml = [
+			"[features]",
+			"network_proxy = true",
+			"[permissions.base.network]",
+			"enabled = true",
+			"[permissions.base.network.domains]",
+			'"github.com" = "allow"',
+			"[permissions.dev]",
+			'extends = "base"',
+			"[permissions.dev.network.domains]",
+			'"*" = "allow"',
+			"",
+		].join("\n");
+		const { findings } = check(toml);
+		expect(findings.map((f) => [f.ruleId, f.setting])).toEqual([
+			["codex/network-all", "[permissions.dev.network] enabled = true"],
+		]);
+		expect(check(stringify(proposal(toml))).findings).toEqual([]);
+	});
+
+	it("does not repeat a parent's finding for a child that changes nothing about the network", () => {
+		const toml =
+			'[permissions.base.network]\nenabled = true\n[permissions.dev]\nextends = "base"\n';
+		expect(check(toml).findings.map((f) => f.setting)).toEqual([
+			"[permissions.base.network] enabled = true",
+		]);
+	});
+
+	it("flags ~ made a workspace root by a read-only parent when the child writes workspace roots", () => {
+		const toml = [
+			"[permissions.base]",
+			'extends = ":read-only"',
+			"[permissions.base.workspace_roots]",
+			'"~" = true',
+			"[permissions.dev]",
+			'extends = "base"',
+			'[permissions.dev.filesystem.":workspace_roots"]',
+			'"." = "write"',
+			"",
+		].join("\n");
+		const { findings } = check(toml);
+		expect(findings.map((f) => f.ruleId)).toEqual(["codex/write-home"]);
+		expect(check(stringify(proposal(toml))).findings).toEqual([]);
+	});
+
+	it("does not set glob_scan_max_depth when a parent already sets it", () => {
+		const toml = [
+			'default_permissions = "dev"',
+			"[permissions.base.filesystem]",
+			"glob_scan_max_depth = 6",
+			"[permissions.dev]",
+			'extends = "base"',
+			"",
+		].join("\n");
+		const p = proposal(toml, { secretFiles: [".env"] }) as {
+			permissions: { dev: { filesystem: Record<string, unknown> } };
+		};
+		expect(p.permissions.dev.filesystem.glob_scan_max_depth).toBeUndefined();
+	});
+});
+
+describe("writes to the whole home or root when compared with sandbox_mode", () => {
+	it("treats a profile writing the root as broader than workspace-write", () => {
+		const toml = [
+			'sandbox_mode = "workspace-write"',
+			'default_permissions = "a"',
+			"[permissions.a]",
+			'extends = ":workspace"',
+			"[permissions.a.filesystem]",
+			'":root" = "write"',
+			"",
+		].join("\n");
+		const p = proposal(toml) as Record<string, unknown>;
+		expect(p.sandbox_mode).toBe("workspace-write");
+		expect(p.default_permissions).toBeUndefined();
+	});
+
+	it("treats home as a writable workspace root as broader than workspace-write", () => {
+		const toml = [
+			'sandbox_mode = "workspace-write"',
+			'default_permissions = "a"',
+			"[permissions.a]",
+			'extends = ":workspace"',
+			"[permissions.a.workspace_roots]",
+			'"~" = true',
+			"",
+		].join("\n");
+		const p = proposal(toml) as Record<string, unknown>;
+		expect(p.sandbox_mode).toBe("workspace-write");
+		expect(p.default_permissions).toBeUndefined();
+	});
+});
