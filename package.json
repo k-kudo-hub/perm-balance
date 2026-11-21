@@ -2,6 +2,15 @@
 	"name": "perm-balance",
 	"version": "0.1.0",
 	"description": "Check AI agent (Claude Code, Codex) permission settings by balancing risk and convenience",
+	"keywords": [
+		"claude-code",
+		"codex",
+		"ai-agent",
+		"permissions",
+		"security",
+		"sandbox",
+		"cli"
+	],
 	"type": "module",
 	"bin": {
 		"perm-balance": "dist/cli.js"
@@ -19,7 +28,8 @@
 		"typecheck": "tsc --noEmit",
 		"lint": "biome check .",
 		"format": "biome format --write .",
-		"prepare": "npm run build"
+		"prepare": "npm run build",
+		"prepublishOnly": "npm run typecheck && npm run lint && npm test"
 	},
 	"dependencies": {
 		"smol-toml": "^1.9.1"
@@ -33,5 +43,9 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/k-kudo-hub/perm-balance.git"
+	},
+	"homepage": "https://github.com/k-kudo-hub/perm-balance#readme",
+	"bugs": {
+		"url": "https://github.com/k-kudo-hub/perm-balance/issues"
 	}
 }
