@@ -37,6 +37,8 @@ function customProfiles(config: unknown): Record<string, unknown> {
 }
 
 interface ProfileChain {
+	/** Names of the profiles from the given one to its farthest parent */
+	names: string[];
 	/** Named profiles from the given one to its farthest parent */
 	profiles: unknown[];
 	/** The built-in profile the chain ends at, if any */
@@ -45,16 +47,18 @@ interface ProfileChain {
 
 /** Follows `extends` from a profile to a built-in profile or to a profile without `extends` */
 function profileChain(config: unknown, name: string): ProfileChain {
+	const names: string[] = [];
 	const profiles: unknown[] = [];
 	let current: unknown = name;
 	for (let i = 0; i < 10 && typeof current === "string"; i++) {
 		if (BUILTIN_RANK[current] !== undefined)
-			return { profiles, builtin: current };
+			return { names, profiles, builtin: current };
 		const profile = customProfiles(config)[current];
+		names.push(current);
 		profiles.push(profile);
 		current = get(profile, ["extends"]);
 	}
-	return { profiles };
+	return { names, profiles };
 }
 
 /** Whether a filesystem table grants `write` anywhere, including nested subpaths */
@@ -77,6 +81,35 @@ function profileRank(config: unknown, name: string): number {
 		grantsWrite(get(p, ["filesystem"])),
 	);
 	return writes ? Math.max(base, 1) : base;
+}
+
+/** Domain rules in effect for a profile: the parents' rules, overridden by the child's */
+function effectiveDomains(
+	config: unknown,
+	name: string,
+): Record<string, unknown> {
+	const chain = profileChain(config, name);
+	const merged: Record<string, unknown> = {};
+	for (const profile of [...chain.profiles].reverse()) {
+		const domains = get(profile, ["network", "domains"]);
+		if (isObj(domains)) Object.assign(merged, domains);
+	}
+	return merged;
+}
+
+/**
+ * Whether a profile can write inside its workspace roots, decided by the nearest `:workspace_roots` rule for "."
+ * in the chain, or by the built-in parent (:workspace writes there) when none sets it
+ */
+function workspaceRootsWritable(config: unknown, name: string): boolean {
+	const chain = profileChain(config, name);
+	for (const profile of chain.profiles) {
+		const rule = get(profile, ["filesystem", ":workspace_roots"]);
+		if (typeof rule === "string") return rule === "write";
+		if (isObj(rule) && typeof rule["."] === "string")
+			return rule["."] === "write";
+	}
+	return chain.builtin === ":workspace";
 }
 
 /** Whether a profile allows network access, resolved by following `extends` to the first profile that sets network.enabled, or to a built-in profile */
@@ -218,12 +251,46 @@ function checkProfile(
 		}
 	}
 
+	const roots = get(profile, ["workspace_roots"]);
+	if (isObj(roots) && workspaceRootsWritable(config, name)) {
+		for (const [path, enabled] of Object.entries(roots)) {
+			if (enabled !== true || !isHomeOrRoot(path)) continue;
+			out.push({
+				ruleId: "codex/write-home",
+				setting: `[permissions.${name}.workspace_roots] "${path}" = true`,
+				risk: "high",
+				riskReason:
+					"Makes your home or the root a workspace root, which this profile can write, so it can rewrite shell configs or SSH keys and run code on the next launch",
+				convenience: "medium",
+				convenienceReason: "Tools never stop on writes to caches or config",
+				suggestion: {
+					summary:
+						"Remove it and allow writes only to the cache directories this project's tools use",
+					patches: [
+						{
+							op: "delete",
+							path: ["permissions", name, "workspace_roots", path],
+						},
+						...homeWriteCandidates(ctx.facts).map(
+							(dir): Patch => ({
+								op: "set",
+								path: [...fsPath, dir],
+								value: "write",
+							}),
+						),
+					],
+				},
+			});
+		}
+	}
+
 	const network = get(profile, ["network"]);
 	if (!isObj(network)) return out;
 	if (network.enabled === true) {
-		const domains = get(network, ["domains"]);
-		const allowAll = isObj(domains) && domains["*"] === "allow";
-		const hasAllow = isObj(domains) && Object.values(domains).includes("allow");
+		// Domain rules are inherited through extends
+		const domains = effectiveDomains(config, name);
+		const allowAll = domains["*"] === "allow";
+		const hasAllow = Object.values(domains).includes("allow");
 		const proxy = proxyOn(config);
 		// With the proxy on and no "*" allowed, only allowed domains are reachable (none at all if nothing is allowed)
 		if (allowAll || !proxy) {
@@ -244,7 +311,26 @@ function checkProfile(
 					summary: keepDomains
 						? "Turn on [features] network_proxy so the domain list is enforced"
 						: "Allow only the package registries and Git hosts this project uses, enforced by the proxy (turn the network off if there are none)",
-					patches: narrowNetwork(config, name, ctx, keepDomains),
+					patches: [
+						...narrowNetwork(config, name, ctx, keepDomains),
+						// A "*" inherited from a parent cannot be overridden ("*" is allow-only), so remove it from the parent
+						...profileChain(config, name)
+							.names.slice(1)
+							.filter(
+								(parent) =>
+									get(customProfiles(config)[parent], [
+										"network",
+										"domains",
+										"*",
+									]) === "allow",
+							)
+							.map(
+								(parent): Patch => ({
+									op: "delete",
+									path: ["permissions", parent, "network", "domains", "*"],
+								}),
+							),
+					],
 				},
 			});
 		}

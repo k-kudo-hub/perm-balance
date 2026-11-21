@@ -361,3 +361,82 @@ describe("write scope of a profile when compared with sandbox_mode", () => {
 		expect(p.default_permissions).toBeUndefined();
 	});
 });
+
+describe("rules inherited through extends", () => {
+	const toml = [
+		"[features]",
+		"network_proxy = true",
+		"[permissions.base.network.domains]",
+		'"*" = "allow"',
+		"[permissions.dev]",
+		'extends = "base"',
+		"[permissions.dev.network]",
+		"enabled = true",
+		"",
+	].join("\n");
+
+	it('flags a child that enables the network under a parent with "*" = "allow"', () => {
+		const { findings } = check(toml);
+		expect(findings.map((f) => [f.ruleId, f.setting])).toEqual([
+			["codex/network-all", "[permissions.dev.network] enabled = true"],
+		]);
+	});
+
+	it('removes the inherited "*" and allows only the project\'s destinations', () => {
+		const p = proposal(toml) as {
+			permissions: Record<string, { network?: { domains?: unknown } }>;
+		};
+		expect(p.permissions.base?.network?.domains).toEqual({});
+		expect(p.permissions.dev?.network?.domains).toEqual({
+			"registry.npmjs.org": "allow",
+			"github.com": "allow",
+		});
+		expect(check(stringify(p)).findings).toEqual([]);
+	});
+});
+
+describe("home or root as a workspace root", () => {
+	it("flags making ~ a workspace root of a profile built on :workspace", () => {
+		const toml =
+			'[permissions.dev]\nextends = ":workspace"\n[permissions.dev.workspace_roots]\n"~" = true\n';
+		const { findings } = check(toml);
+		expect(findings[0]?.ruleId).toBe("codex/write-home");
+		expect(findings[0]?.setting).toBe(
+			'[permissions.dev.workspace_roots] "~" = true',
+		);
+		expect(proposal(toml)).toEqual({
+			permissions: {
+				dev: {
+					extends: ":workspace",
+					workspace_roots: {},
+					filesystem: { "~/.npm": "write" },
+				},
+			},
+		});
+	});
+
+	it('flags it when :workspace_roots is writable with "." = "write"', () => {
+		const toml =
+			'[permissions.dev.workspace_roots]\n"/" = true\n[permissions.dev.filesystem.":workspace_roots"]\n"." = "write"\n';
+		expect(check(toml).findings[0]?.ruleId).toBe("codex/write-home");
+	});
+
+	it("does not flag it for a read-only profile, or when the entry is false", () => {
+		expect(
+			check(
+				'[permissions.dev]\nextends = ":read-only"\n[permissions.dev.workspace_roots]\n"~" = true\n',
+			).findings,
+		).toEqual([]);
+		expect(
+			check(
+				'[permissions.dev]\nextends = ":workspace"\n[permissions.dev.workspace_roots]\n"~" = false\n',
+			).findings,
+		).toEqual([]);
+	});
+
+	it('does not flag it when the profile overrides :workspace_roots "." to read', () => {
+		const toml =
+			'[permissions.dev]\nextends = ":workspace"\n[permissions.dev.workspace_roots]\n"~" = true\n[permissions.dev.filesystem.":workspace_roots"]\n"." = "read"\n';
+		expect(check(toml).findings).toEqual([]);
+	});
+});
