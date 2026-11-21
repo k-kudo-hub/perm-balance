@@ -1,0 +1,75 @@
+# Codex の権限プロファイル：仕様と perm-balance の規則の照合
+
+[English](codex-permissions-check.md)
+
+Codex の権限プロファイルは Beta（「Permission profiles are under active development and may change」）のため、`src/rules/codex.ts` の規則が仕様とずれることがあります。このページは、仕様の項目ごとに規則が合っているかを記録したものです。
+
+- 照合した日: 2026-11-21
+- 照合した文書（`developers.openai.com/codex/...` は `learn.chatgpt.com/docs/...` に転送されます）
+  - [Permissions](https://developers.openai.com/codex/permissions)
+  - [Configuration Reference](https://developers.openai.com/codex/config-file/config-reference)（`default_permissions`・`permissions.*`・`features.network_proxy*`・`sandbox_mode`・`sandbox_workspace_write.*`・`approval_policy`）
+  - [Advanced Configuration](https://developers.openai.com/codex/config-file/config-advanced)（設定プロファイル）
+
+状態:
+
+- **合っている**: 規則が仕様どおり
+- **直した**: 規則が仕様と食い違っていたため、このページと一緒に直した（直したものは `test/codex.test.ts` にテストがある）
+- **対象外**: 点検しない。理由を備考に書く
+
+## プロファイルの選択
+
+| 仕様                                                                                                                                                  | 状態       | 備考                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `default_permissions` は `[permissions]` のプロファイルか組み込み（`:read-only`・`:workspace`・`:danger-full-access`）を指す                          | 合っている | `:danger-full-access` は「狭める」と指摘する                                                                              |
+| プロファイルは `sandbox_mode`・`[sandbox_workspace_write]` と組み合わせられず、`sandbox_mode` があると `default_permissions` ではなく旧来の設定が効く | 合っている | `codex/profile-ignored` として、広いほうを消す案を出す                                                                    |
+| 「`sandbox_mode` が**読み込まれるどれかの設定ファイル**にあれば」                                                                                     | 対象外     | ファイルごとに点検する。`~/.codex/config.toml` の `sandbox_mode` がプロジェクトのプロファイルを無効にしていても見つけない |
+| 設定プロファイルは別ファイル（`~/.codex/<名前>.config.toml`、Codex 0.134.0 以降）                                                                     | 対象外     | 探さない。`--file` で渡せば点検する                                                                                       |
+| 管理者の `requirements.toml`（`allowed_permission_profiles`・`[experimental_network]`）                                                               | 対象外     | 利用者の設定ではない                                                                                                      |
+
+## `[permissions.<名前>]`
+
+| 仕様                                                                                                                                                              | 状態       | 備考                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `extends` は `:read-only`・`:workspace`・ほかの名前付きプロファイルから始める                                                                                     | 合っている | 組み込みまでたどる                                                                                                                                                                                                                                                                               |
+| `extends = ":danger-full-access"`・存在しない親・循環は拒否される                                                                                                 | 対象外     | Codex が設定を受け付けないため、その設定では動かない                                                                                                                                                                                                                                             |
+| `extends` のないプロファイルは `filesystem` に書いたものだけを許す（「Missing or empty filesystem tables keep filesystem access restricted」）                    | **直した** | `:workspace` と同じに扱っていた。自分の `write` から書き込み範囲を決めるようにした                                                                                                                                                                                                               |
+| `filesystem` の `write` は親に上乗せされる                                                                                                                        | **直した** | `sandbox_mode` と広さを比べるとき `write` を数えておらず、親より広く書けるプロファイルを狭いと判定して `sandbox_mode` を消す案を出すことがあった。`write` を数え、ホーム全体やルートへの書き込み（直接でもワークスペースのルートとしてでも）は `danger-full-access` と同じ広さとみなすようにした |
+| `description`                                                                                                                                                     | 対象外     | 権限に影響しない                                                                                                                                                                                                                                                                                 |
+| `[permissions.<名前>.workspace_roots] "<パス>" = true` はそのパスをワークスペースのルートに加え、`:workspace_roots` の規則が当たる（`:workspace` はそこに書ける） | **直した** | 書き込めるプロファイルで `~` や `/` をルートにすると（親の `workspace_roots` から引き継いだ場合を含む）、ホーム全体やルートに書ける。`codex/write-home` として指摘するようにした                                                                                                                 |
+
+## ファイルシステム
+
+| 仕様                                                                                                                        | 状態       | 備考                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 値は `read`・`write`・`deny`。具体的なほうが勝ち、同じパスなら `deny` > `write` > `read`                                    | 合っている | 書き込みとして扱うのは `write` だけ                                                                                                                                      |
+| 入れ子の書き方（`[filesystem."<パス>"] "." = "write"`）                                                                     | 合っている |                                                                                                                                                                          |
+| `:root`・`/`・`~`                                                                                                           | 合っている | `write` を `codex/write-home` として指摘する                                                                                                                             |
+| `:minimal`・`:tmpdir`・`:slash_tmp`・`:workspace_roots`・`~/パス`・絶対パス                                                 | 合っている | ホーム全体やルートではないので指摘しない                                                                                                                                 |
+| 拒否の glob は読み取り拒否として効く。Linux・WSL・Windows では、上限のない `**` を使うとき `glob_scan_max_depth` を設定する | **直した** | 秘密ファイルの読み取り拒否の案（`"**/.env" = "deny"`）に、perm-balance が秘密ファイルを探す深さと同じ `glob_scan_max_depth = 3` を添えるようにした。すでに値があれば残す |
+
+## ネットワーク
+
+| 仕様                                                                                                                                    | 状態                   | 備考                                                                                                                                                                                                                               |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network.enabled`（既定は `false`）は通信を許すがプロキシを起動しない。プロキシがなければ制限なしに直接通信できる                       | 合っている             | `codex/network-all` として指摘する                                                                                                                                                                                                 |
+| `features.network_proxy` は `boolean \| table`。表のときは `enabled = true` でプロキシが起動する（既定は `false`）                      | **直した**             | `network_proxy = true` だけを見ていたため、`[features.network_proxy] enabled = true` を「プロキシなし」と誤検知し、設定案で表を `true` に置き換えていた。表の形を読み、設定案も表の中に `enabled = true` を書くようにした          |
+| `domains` の値は `allow`・`deny`。`"*"` は許可専用の全宛先。プロキシがあって `allow` がなければ外部への通信は止まる                     | 合っている             | `"*" = "allow"` を指摘し、`allow` のないプロキシは指摘しない                                                                                                                                                                       |
+| 規則は `extends` で引き継がれる（「Set the parent once, then add or override only the rules that differ」）                             | **直した**             | 自分の `enabled` と `domains` だけを読んでいたため、親に `"*" = "allow"` があり子が通信を有効にする場合と、親が通信を有効にし子が `"*" = "allow"` を足す場合を見逃していた。どちらも書かない子は、親で指摘するので重ねて指摘しない |
+| `dangerously_allow_all_unix_sockets`                                                                                                    | 合っている／**直した** | `[permissions.<名前>.network]` では指摘していた。`[features.network_proxy]` の同じキーを見逃していたので指摘するようにした                                                                                                         |
+| `dangerously_allow_non_loopback_proxy`（「Leave unset for ordinary local development」「can expose proxy listeners beyond localhost」） | **直した**             | 点検していなかった。もう1つの `dangerously_*` と同じく、両方の場所で「採用しない」と指摘するようにした                                                                                                                             |
+| `unix_sockets."<パス>" = "allow"`                                                                                                       | 対象外                 | Docker のような手元の連携のため、1つずつ許す書き方を仕様が示している                                                                                                                                                               |
+| `allow_local_binding`                                                                                                                   | 対象外                 | 許可したホスト名が手元や社内のアドレスに解決されるときに必要で、その場合にもっと狭い書き方がない。`localhost`・`127.0.0.1` そのものは、これを使わず `domains` で許可できる                                                         |
+| `proxy_url`・`socks_url`・`enable_socks5`・`enable_socks5_udp`                                                                          | 対象外                 | 待ち受けの設定。ループバック以外で待ち受けるには `dangerously_allow_non_loopback_proxy` が要り、そちらを指摘する                                                                                                                   |
+| `allow_upstream_proxy`（既定は `true`）                                                                                                 | 対象外                 | サンドボックスのプロキシが外へ出す通信を、`HTTP(S)_PROXY`・`ALL_PROXY` で指定した上位のプロキシ経由にする設定。コマンドが通信できる宛先を決める設定ではない                                                                        |
+| `network.mode`（`limited \| full`）                                                                                                     | 対象外                 | Configuration Reference にだけ載っており、振る舞いが書かれていない                                                                                                                                                                 |
+| `[features.network_proxy.domains]`（機能の側の宛先の規則）                                                                              | 対象外                 | プロファイルの `domains` とどう組み合わさるかが書かれていない                                                                                                                                                                      |
+
+## 旧来のサンドボックスの設定
+
+| 仕様                                                             | 状態       | 備考                                                      |
+| ---------------------------------------------------------------- | ---------- | --------------------------------------------------------- |
+| `sandbox_mode = "danger-full-access"`                            | 合っている | 指摘する。`approval_policy = "never"` なら理由に添える    |
+| `[sandbox_workspace_write] network_access = true`                | 合っている | `codex/legacy-network-all` として指摘する                 |
+| `[sandbox_workspace_write] writable_roots`                       | 合っている | ホームやルートを `codex/legacy-write-home` として指摘する |
+| `exclude_slash_tmp`・`exclude_tmpdir_env_var`                    | 対象外     | 狭める方向にしか働かない                                  |
+| `approval_policy`（`untrusted` は非対応、`on-failure` は非推奨） | 対象外     | 権限の範囲ではない                                        |

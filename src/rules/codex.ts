@@ -2,9 +2,10 @@ import { homedir } from "node:os";
 import {
 	homeWriteCandidates,
 	networkDomains,
+	SECRET_SCAN_DEPTH,
 	secretDenyGlobs,
 } from "../project.js";
-import type { Patch, Recommendation } from "../types.js";
+import type { Patch, Recommendation, Suggestion } from "../types.js";
 import {
 	type Assessment,
 	get,
@@ -36,16 +37,121 @@ function customProfiles(config: unknown): Record<string, unknown> {
 	return isObj(permissions) ? permissions : {};
 }
 
-/** How broad a profile is (0: read-only, 1: can write the workspace, 2: unrestricted), resolved by following `extends` to a built-in profile */
-function profileRank(config: unknown, name: string): number {
+interface ProfileChain {
+	/** Names of the profiles from the given one to its farthest parent */
+	names: string[];
+	/** Named profiles from the given one to its farthest parent */
+	profiles: unknown[];
+	/** The built-in profile the chain ends at, if any */
+	builtin?: string;
+}
+
+/** Follows `extends` from a profile to a built-in profile or to a profile without `extends` */
+function profileChain(config: unknown, name: string): ProfileChain {
+	const names: string[] = [];
+	const profiles: unknown[] = [];
 	let current: unknown = name;
 	for (let i = 0; i < 10 && typeof current === "string"; i++) {
-		const builtin = BUILTIN_RANK[current];
-		if (builtin !== undefined) return builtin;
-		current = get(customProfiles(config)[current], ["extends"]);
+		if (BUILTIN_RANK[current] !== undefined)
+			return { names, profiles, builtin: current };
+		const profile = customProfiles(config)[current];
+		names.push(current);
+		profiles.push(profile);
+		current = get(profile, ["extends"]);
 	}
-	// The docs do not define the base of a profile without `extends`, so treat it like the built-in :workspace
-	return 1;
+	return { names, profiles };
+}
+
+/** Whether a filesystem table grants `write` anywhere, including nested subpaths */
+function grantsWrite(filesystem: unknown): boolean {
+	if (!isObj(filesystem)) return false;
+	return Object.values(filesystem).some(
+		(v) => v === "write" || (isObj(v) && Object.values(v).includes("write")),
+	);
+}
+
+/**
+ * How broad a profile is (0: read-only, 1: can write somewhere, 2: unrestricted).
+ * A profile starts from its built-in parent, or from no access when it has no `extends`
+ * ("Missing or empty filesystem tables keep filesystem access restricted"), and `write` entries add writes on top
+ */
+function profileRank(config: unknown, name: string): number {
+	const chain = profileChain(config, name);
+	const base = chain.builtin ? (BUILTIN_RANK[chain.builtin] ?? 0) : 0;
+	// Writing the whole home or root is as broad as having no sandbox for writes
+	const writesHome =
+		chain.profiles.some(
+			(p) => homeWriteEntries(get(p, ["filesystem"])).length > 0,
+		) ||
+		(workspaceRootsWritable(config, name) &&
+			homeWorkspaceRoots(config, name).length > 0);
+	if (writesHome) return 2;
+	const writes = chain.profiles.some((p) =>
+		grantsWrite(get(p, ["filesystem"])),
+	);
+	return writes ? Math.max(base, 1) : base;
+}
+
+/** Filesystem paths that grant `write` on the whole home or root */
+function homeWriteEntries(filesystem: unknown): string[] {
+	if (!isObj(filesystem)) return [];
+	return Object.entries(filesystem)
+		.filter(
+			([path, value]) =>
+				isHomeOrRoot(path) &&
+				(value === "write" || (isObj(value) && value["."] === "write")),
+		)
+		.map(([path]) => path);
+}
+
+/**
+ * Home or root entries in effect in a profile's workspace_roots, inherited through extends
+ * (a child's entry overrides its parent's), with the profile that sets each
+ */
+function homeWorkspaceRoots(
+	config: unknown,
+	name: string,
+): { path: string; owner: string }[] {
+	const chain = profileChain(config, name);
+	const merged = new Map<string, { enabled: unknown; owner: string }>();
+	for (let i = chain.profiles.length - 1; i >= 0; i--) {
+		const roots = get(chain.profiles[i], ["workspace_roots"]);
+		if (!isObj(roots)) continue;
+		for (const [path, enabled] of Object.entries(roots))
+			merged.set(path, { enabled, owner: chain.names[i] ?? name });
+	}
+	return [...merged]
+		.filter(([path, v]) => v.enabled === true && isHomeOrRoot(path))
+		.map(([path, v]) => ({ path, owner: v.owner }));
+}
+
+/** Domain rules in effect for a profile: the parents' rules, overridden by the child's */
+function effectiveDomains(
+	config: unknown,
+	name: string,
+): Record<string, unknown> {
+	const chain = profileChain(config, name);
+	const merged: Record<string, unknown> = {};
+	for (const profile of [...chain.profiles].reverse()) {
+		const domains = get(profile, ["network", "domains"]);
+		if (isObj(domains)) Object.assign(merged, domains);
+	}
+	return merged;
+}
+
+/**
+ * Whether a profile can write inside its workspace roots, decided by the nearest `:workspace_roots` rule for "."
+ * in the chain, or by the built-in parent (:workspace writes there) when none sets it
+ */
+function workspaceRootsWritable(config: unknown, name: string): boolean {
+	const chain = profileChain(config, name);
+	for (const profile of chain.profiles) {
+		const rule = get(profile, ["filesystem", ":workspace_roots"]);
+		if (typeof rule === "string") return rule === "write";
+		if (isObj(rule) && typeof rule["."] === "string")
+			return rule["."] === "write";
+	}
+	return chain.builtin === ":workspace";
 }
 
 /** Whether a profile allows network access, resolved by following `extends` to the first profile that sets network.enabled, or to a built-in profile */
@@ -71,6 +177,19 @@ function legacyNetwork(config: unknown, sandboxMode: string): boolean {
 	);
 }
 
+/** Whether the network proxy is started: `[features] network_proxy = true`, or `enabled = true` in the `[features.network_proxy]` table */
+function proxyOn(config: unknown): boolean {
+	const proxy = get(config, ["features", "network_proxy"]);
+	return proxy === true || (isObj(proxy) && proxy.enabled === true);
+}
+
+/** Patch that starts the proxy, keeping the other settings when `[features.network_proxy]` is a table */
+function enableProxy(config: unknown): Patch {
+	return isObj(get(config, ["features", "network_proxy"]))
+		? { op: "set", path: ["features", "network_proxy", "enabled"], value: true }
+		: { op: "set", path: ["features", "network_proxy"], value: true };
+}
+
 /** Name for a new profile that does not collide with an existing one */
 function newProfileName(config: unknown): string {
 	return "project" in customProfiles(config) ? "project-narrow" : "project";
@@ -81,13 +200,13 @@ function newProfileName(config: unknown): string {
  * The proxy blocks external traffic when nothing is allowed, so with no candidate domains, turn the network off
  */
 function narrowNetwork(
+	config: unknown,
 	profile: string,
 	ctx: RuleContext,
 	keepDomains: boolean,
 ): Patch[] {
 	const base = ["permissions", profile, "network"];
-	if (keepDomains)
-		return [{ op: "set", path: ["features", "network_proxy"], value: true }];
+	if (keepDomains) return [enableProxy(config)];
 	const domains = networkDomains(ctx.facts);
 	if (domains.length === 0) {
 		return [
@@ -97,7 +216,7 @@ function narrowNetwork(
 	}
 	return [
 		{ op: "set", path: [...base, "enabled"], value: true },
-		{ op: "set", path: ["features", "network_proxy"], value: true },
+		enableProxy(config),
 		{ op: "delete", path: [...base, "domains", "*"] },
 		...domains.map(
 			(d): Patch => ({
@@ -127,12 +246,62 @@ function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 				value: "write",
 			}),
 		),
-		...narrowNetwork(name, ctx, false),
+		...narrowNetwork(config, name, ctx, false),
 	];
 }
 
 const NETWORK_RISK =
 	"Commands can reach any host, and may send secrets out by following instructions they read";
+
+/**
+ * The dangerously_* network keys, which the docs call escape hatches for specialized environments
+ * that "should not be used for ordinary local development". They can be set in a profile's network table
+ * or in the [features.network_proxy] table
+ */
+function checkDangerousNetworkKeys(
+	table: Record<string, unknown>,
+	path: string[],
+	label: string,
+): Assessment[] {
+	const out: Assessment[] = [];
+	const remove = (key: string): Suggestion["patches"] => [
+		{ op: "delete", path: [...path, key] },
+	];
+	if (table.dangerously_allow_all_unix_sockets === true) {
+		out.push({
+			ruleId: "codex/all-unix-sockets",
+			setting: `${label} dangerously_allow_all_unix_sockets = true`,
+			risk: "high",
+			riskReason:
+				"Reaches sockets such as Docker's, which control things outside the sandbox just by connecting",
+			convenience: "low",
+			convenienceReason:
+				"Only a few sockets are needed, and [permissions.<name>.network.unix_sockets] can allow them one by one",
+			suggestion: {
+				summary:
+					"Remove it and allow only the sockets you use with unix_sockets",
+				patches: remove("dangerously_allow_all_unix_sockets"),
+			},
+		});
+	}
+	if (table.dangerously_allow_non_loopback_proxy === true) {
+		out.push({
+			ruleId: "codex/non-loopback-proxy",
+			setting: `${label} dangerously_allow_non_loopback_proxy = true`,
+			risk: "medium",
+			riskReason:
+				"Lets the proxy listen beyond localhost, so other machines on the network can reach it and send traffic through your allowed destinations",
+			convenience: "low",
+			convenienceReason:
+				"Commands in the sandbox reach the proxy on localhost, so ordinary local development does not need it",
+			suggestion: {
+				summary: "Remove it so the proxy listens only on localhost",
+				patches: remove("dangerously_allow_non_loopback_proxy"),
+			},
+		});
+	}
+	return out;
+}
 
 function checkProfile(
 	name: string,
@@ -174,13 +343,50 @@ function checkProfile(
 		}
 	}
 
+	if (workspaceRootsWritable(config, name)) {
+		for (const { path, owner } of homeWorkspaceRoots(config, name)) {
+			// An inherited entry is reported on the parent when the parent itself can write there
+			if (owner !== name && workspaceRootsWritable(config, owner)) continue;
+			out.push({
+				ruleId: "codex/write-home",
+				setting: `[permissions.${owner}.workspace_roots] "${path}" = true`,
+				risk: "high",
+				riskReason:
+					"Makes your home or the root a workspace root, which this profile can write, so it can rewrite shell configs or SSH keys and run code on the next launch",
+				convenience: "medium",
+				convenienceReason: "Tools never stop on writes to caches or config",
+				suggestion: {
+					summary:
+						"Remove it and allow writes only to the cache directories this project's tools use",
+					patches: [
+						{
+							op: "delete",
+							path: ["permissions", owner, "workspace_roots", path],
+						},
+						...homeWriteCandidates(ctx.facts).map(
+							(dir): Patch => ({
+								op: "set",
+								path: [...fsPath, dir],
+								value: "write",
+							}),
+						),
+					],
+				},
+			});
+		}
+	}
+
 	const network = get(profile, ["network"]);
 	if (!isObj(network)) return out;
-	if (network.enabled === true) {
-		const domains = get(network, ["domains"]);
-		const allowAll = isObj(domains) && domains["*"] === "allow";
-		const hasAllow = isObj(domains) && Object.values(domains).includes("allow");
-		const proxy = get(config, ["features", "network_proxy"]) === true;
+	// enabled is inherited through extends. A child that changes nothing about the network repeats its parent, so only
+	// a child that sets enabled or domains itself is checked
+	const ownRules = network.enabled === true || isObj(network.domains);
+	if (ownRules && profileNetwork(config, name)) {
+		// Domain rules are inherited through extends
+		const domains = effectiveDomains(config, name);
+		const allowAll = domains["*"] === "allow";
+		const hasAllow = Object.values(domains).includes("allow");
+		const proxy = proxyOn(config);
 		// With the proxy on and no "*" allowed, only allowed domains are reachable (none at all if nothing is allowed)
 		if (allowAll || !proxy) {
 			const why = allowAll
@@ -191,7 +397,10 @@ function checkProfile(
 			const keepDomains = hasAllow && !allowAll;
 			out.push({
 				ruleId: "codex/network-all",
-				setting: `[permissions.${name}.network] enabled = true`,
+				setting:
+					network.enabled === true
+						? `[permissions.${name}.network] enabled = true`
+						: `[permissions.${name}.network.domains] (enabled = true inherited through extends)`,
 				risk: "high",
 				riskReason: `${why}. ${NETWORK_RISK}`,
 				convenience: "high",
@@ -200,38 +409,37 @@ function checkProfile(
 					summary: keepDomains
 						? "Turn on [features] network_proxy so the domain list is enforced"
 						: "Allow only the package registries and Git hosts this project uses, enforced by the proxy (turn the network off if there are none)",
-					patches: narrowNetwork(name, ctx, keepDomains),
+					patches: [
+						...narrowNetwork(config, name, ctx, keepDomains),
+						// A "*" inherited from a parent cannot be overridden ("*" is allow-only), so remove it from the parent
+						...profileChain(config, name)
+							.names.slice(1)
+							.filter(
+								(parent) =>
+									get(customProfiles(config)[parent], [
+										"network",
+										"domains",
+										"*",
+									]) === "allow",
+							)
+							.map(
+								(parent): Patch => ({
+									op: "delete",
+									path: ["permissions", parent, "network", "domains", "*"],
+								}),
+							),
+					],
 				},
 			});
 		}
 	}
-	if (network.dangerously_allow_all_unix_sockets === true) {
-		out.push({
-			ruleId: "codex/all-unix-sockets",
-			setting: `[permissions.${name}.network] dangerously_allow_all_unix_sockets = true`,
-			risk: "high",
-			riskReason:
-				"Reaches sockets such as Docker's, which control things outside the sandbox just by connecting",
-			convenience: "low",
-			convenienceReason:
-				"Only a few sockets are needed, and [permissions.<name>.network.unix_sockets] can allow them one by one",
-			suggestion: {
-				summary:
-					"Remove it and allow only the sockets you use with unix_sockets",
-				patches: [
-					{
-						op: "delete",
-						path: [
-							"permissions",
-							name,
-							"network",
-							"dangerously_allow_all_unix_sockets",
-						],
-					},
-				],
-			},
-		});
-	}
+	out.push(
+		...checkDangerousNetworkKeys(
+			network,
+			["permissions", name, "network"],
+			`[permissions.${name}.network]`,
+		),
+	);
 	return out;
 }
 
@@ -388,6 +596,17 @@ export function checkCodexConfig(
 		);
 	}
 
+	const proxyTable = get(config, ["features", "network_proxy"]);
+	if (isObj(proxyTable)) {
+		assessments.push(
+			...checkDangerousNetworkKeys(
+				proxyTable,
+				["features", "network_proxy"],
+				"[features.network_proxy]",
+			),
+		);
+	}
+
 	for (const [name, profile] of Object.entries(customProfiles(config))) {
 		assessments.push(...checkProfile(name, profile, config, ctx));
 	}
@@ -418,6 +637,21 @@ export function checkCodexConfig(
 							value: dp === ":read-only" ? ":read-only" : ":workspace",
 						},
 					];
+			// On Linux, WSL and native Windows, an unbounded ** deny pattern may need bounded pre-expansion.
+			// Use the depth perm-balance scans for secret files, and keep a value the user already set (also one inherited from a parent)
+			const depthPath = [
+				"permissions",
+				name,
+				"filesystem",
+				"glob_scan_max_depth",
+			];
+			const depth: Patch[] =
+				useActive &&
+				profileChain(config, name).profiles.some(
+					(p) => get(p, ["filesystem", "glob_scan_max_depth"]) !== undefined,
+				)
+					? []
+					: [{ op: "set", path: depthPath, value: SECRET_SCAN_DEPTH }];
 			recommendations.push({
 				ruleId: "codex/deny-secrets",
 				agent: "codex",
@@ -427,6 +661,7 @@ export function checkCodexConfig(
 					"Work rarely needs to read secrets, so denying them costs almost nothing",
 				patches: [
 					...create,
+					...depth,
 					...missing.map(
 						(g): Patch => ({
 							op: "set",
@@ -440,7 +675,15 @@ export function checkCodexConfig(
 	}
 
 	return {
-		findings: assessments.map((a) => toFinding("codex", ctx, a)),
+		// Children inheriting the same parent setting can produce the same finding; report it once
+		findings: assessments
+			.filter(
+				(a, i) =>
+					assessments.findIndex(
+						(b) => b.ruleId === a.ruleId && b.setting === a.setting,
+					) === i,
+			)
+			.map((a) => toFinding("codex", ctx, a)),
 		recommendations,
 	};
 }
