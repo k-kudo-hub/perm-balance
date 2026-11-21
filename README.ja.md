@@ -141,22 +141,23 @@ Narrowed proposal (only what changes; everything else stays. Use --full-proposal
 
 ### Codex（`config.toml`）
 
-| 設定                                                                                     | 判定                                                                                                   |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `sandbox_mode = "danger-full-access"` / `default_permissions = ":danger-full-access"`    | 狭める。`:workspace` を土台に宛先を絞ったプロファイルにする                                            |
-| ネットワークの全許可（`network_proxy` が無効なままの `enabled = true`・`"*" = "allow"`） | 狭める。プロジェクトが使う宛先だけを許可し、プロキシで強制する。宛先の候補がなければネットワークを切る |
-| 旧来の `[sandbox_workspace_write] network_access = true`                                 | 狭める。宛先を絞ったプロファイルに移す                                                                 |
-| ホーム全体・ルート全体（`"~"`・`":root"`）への `"write"`                                 | 狭める。ツールのキャッシュの場所だけにする                                                             |
-| 旧来の `writable_roots` のホーム・ルート                                                 | 狭める                                                                                                 |
-| `dangerously_allow_all_unix_sockets = true`                                              | 採用しない                                                                                             |
-| `default_permissions` と `sandbox_mode` の併記（`sandbox_mode` だけが効く）              | 採用しない。書き込みの範囲と通信を比べて広いほうを消し、狭いほうを効かせる                             |
-| 秘密情報のファイルがあるのに読み取りを拒否していない                                     | 足すとよい（`"**/.env" = "deny"`）                                                                     |
+| 設定                                                                                                                                                 | 判定                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `sandbox_mode = "danger-full-access"` / `default_permissions = ":danger-full-access"`                                                                | 狭める。`:workspace` を土台に宛先を絞ったプロファイルにする                                            |
+| ネットワークの全許可（`network_proxy` が無効なままの `enabled = true`・`extends` で引き継いだものを含む `"*" = "allow"`）                            | 狭める。プロジェクトが使う宛先だけを許可し、プロキシで強制する。宛先の候補がなければネットワークを切る |
+| 旧来の `[sandbox_workspace_write] network_access = true`                                                                                             | 狭める。宛先を絞ったプロファイルに移す                                                                 |
+| ホーム全体・ルート全体（`"~"`・`":root"`）への `"write"`、書き込めるプロファイルの `workspace_roots` のホーム・ルート                                | 狭める。ツールのキャッシュの場所だけにする                                                             |
+| 旧来の `writable_roots` のホーム・ルート                                                                                                             | 狭める                                                                                                 |
+| `dangerously_allow_all_unix_sockets = true`・`dangerously_allow_non_loopback_proxy = true`（プロファイルと `[features.network_proxy]` のどちらでも） | 採用しない                                                                                             |
+| `default_permissions` と `sandbox_mode` の併記（`sandbox_mode` だけが効く）                                                                          | 採用しない。書き込みの範囲と通信を比べて広いほうを消し、狭いほうを効かせる                             |
+| 秘密情報のファイルがあるのに読み取りを拒否していない                                                                                                 | 足すとよい（`"**/.env" = "deny"` と `glob_scan_max_depth`）                                            |
 
 ## 限界
 
 - 設定ファイルの書き方を読む静的な点検です。エージェントの実際の振る舞いは確かめません
 - リスクと利便性の評価は、規則ごとに決めた固定の値で、チームの事情を知りません。たとえば本番の認証情報を扱うリポジトリでは、`WebFetch` の許可も「狭める」ではなく外すべきですが、perm-balance は「狭める」と判定します
 - Codex の設定案は TOML を読み直して書き出すため、元のファイルのコメントは引き継がれません
+- Codex の権限プロファイルは Beta です。仕様の項目ごとの扱いと、最後に照らし合わせた日は [docs/codex-permissions-check.ja.md](docs/codex-permissions-check.ja.md) に記録しています
 - Claude Code の Bash の許可は文字列の一致で判定されるため、許可を狭めても、それだけでは安全の境界になりません（[Claude Code のドキュメント](https://code.claude.com/docs/en/permissions)）。確認なしで動かすなら、サンドボックスと組み合わせてください
 
 ## ライセンス

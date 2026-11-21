@@ -143,22 +143,23 @@ Narrowed proposal (only what changes; everything else stays. Use --full-proposal
 
 ### Codex (`config.toml`)
 
-| Setting                                                                               | Verdict                                                                                                 |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sandbox_mode = "danger-full-access"` / `default_permissions = ":danger-full-access"` | Narrow: a profile based on `:workspace` with restricted domains                                         |
-| Full network access (`enabled = true` with `network_proxy` off, or `"*" = "allow"`)   | Narrow: allow only the project's domains, enforced by the proxy; turn the network off if there are none |
-| Legacy `[sandbox_workspace_write] network_access = true`                              | Narrow: move to a profile with restricted domains                                                       |
-| `"write"` on your whole home or the root (`"~"`, `":root"`)                           | Narrow: only the tools' cache directories                                                               |
-| Home or root in legacy `writable_roots`                                               | Narrow                                                                                                  |
-| `dangerously_allow_all_unix_sockets = true`                                           | Reject                                                                                                  |
-| Both `default_permissions` and `sandbox_mode` (only `sandbox_mode` applies)           | Reject: compare write scope and network access, remove the broader one so the narrower one applies      |
-| Secret files present but reads not denied                                             | Consider adding: `"**/.env" = "deny"`                                                                   |
+| Setting                                                                                                                                     | Verdict                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `sandbox_mode = "danger-full-access"` / `default_permissions = ":danger-full-access"`                                                       | Narrow: a profile based on `:workspace` with restricted domains                                         |
+| Full network access (`enabled = true` with `network_proxy` off, or `"*" = "allow"`, including one inherited through `extends`)              | Narrow: allow only the project's domains, enforced by the proxy; turn the network off if there are none |
+| Legacy `[sandbox_workspace_write] network_access = true`                                                                                    | Narrow: move to a profile with restricted domains                                                       |
+| `"write"` on your whole home or the root (`"~"`, `":root"`), or home or root in `workspace_roots` of a write-capable profile                | Narrow: only the tools' cache directories                                                               |
+| Home or root in legacy `writable_roots`                                                                                                     | Narrow                                                                                                  |
+| `dangerously_allow_all_unix_sockets = true` / `dangerously_allow_non_loopback_proxy = true` (in a profile or in `[features.network_proxy]`) | Reject                                                                                                  |
+| Both `default_permissions` and `sandbox_mode` (only `sandbox_mode` applies)                                                                 | Reject: compare write scope and network access, remove the broader one so the narrower one applies      |
+| Secret files present but reads not denied                                                                                                   | Consider adding: `"**/.env" = "deny"` with `glob_scan_max_depth`                                        |
 
 ## Limitations
 
 - It is a static check of how the settings are written. It does not observe what the agent actually does
 - Risk and convenience are fixed values per rule and know nothing about your team. For example, in a repository that handles production credentials, even `WebFetch` should be removed, but perm-balance rates it "Narrow"
 - Codex proposals are produced by re-serializing the TOML, so comments in the original file are not preserved
+- Codex permission profiles are in beta. How each part of the spec is handled, and when it was last checked, is recorded in [docs/codex-permissions-check.md](docs/codex-permissions-check.md)
 - Claude Code matches Bash rules as text, so narrowing them alone is not a security boundary ([Claude Code docs](https://code.claude.com/docs/en/permissions)). If you run commands without confirmation, combine it with the sandbox
 
 ## License
