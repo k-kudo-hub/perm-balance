@@ -1,6 +1,6 @@
 # perm-balance
 
-English | [日本語](README.ja.md)
+English | [日本語](https://github.com/k-kudo-hub/perm-balance/blob/main/README.ja.md)
 
 A CLI that checks the permission settings you give AI agents (Claude Code and Codex) by **balancing risk and convenience**.
 It flags risky settings and prints a narrowed proposal that keeps your work flowing, ready to drop in.
@@ -56,8 +56,11 @@ perm-balance rates, in addition to severity, **what the setting is doing for you
 Requires Node.js 20 or later.
 
 ```bash
-# Run straight from GitHub
-npx github:k-kudo-hub/perm-balance
+# Check the current directory
+npx perm-balance
+
+# Check another project
+npx perm-balance /path/to/your/project
 
 # Or clone and build
 git clone https://github.com/k-kudo-hub/perm-balance.git
