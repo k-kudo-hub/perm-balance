@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { decideVerdict } from "../src/verdict.js";
 
 describe("decideVerdict", () => {
-	it("リスクが小さければ、利便性によらず許可してよい", () => {
+	it("リスクが小さく利便性があれば許可してよい", () => {
 		expect(decideVerdict("low", "high")).toBe("keep");
-		expect(decideVerdict("low", "low")).toBe("keep");
+		expect(decideVerdict("low", "medium")).toBe("keep");
 	});
 
-	it("リスクがあって利便性が小さければ採用しない", () => {
+	it("利便性が小さければ、リスクによらず採用しない（最小から渡す）", () => {
+		expect(decideVerdict("low", "low")).toBe("reject");
 		expect(decideVerdict("high", "low")).toBe("reject");
 		expect(decideVerdict("medium", "low")).toBe("reject");
 	});

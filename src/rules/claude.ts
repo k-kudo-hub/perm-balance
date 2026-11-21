@@ -204,7 +204,8 @@ function assessBash(
 	}
 
 	// 引数を固定したコマンド（`*` を含まない）は範囲が決まっているので指摘しない
-	if (!pattern.includes("*")) return undefined;
+	const outwardExact = OUTWARD.find((c) => startsWithCommand(pattern, c));
+	if (!pattern.includes("*") && !outwardExact) return undefined;
 
 	const head = (pattern.split(/\s+/)[0] ?? "").replace(/\*$/, "");
 
@@ -323,14 +324,28 @@ function assessBash(
 	return undefined;
 }
 
-function isHomePath(path: string): boolean {
-	const home = homedir();
-	const p = path.replace(/\/\*\*?$/, "").replace(/\/$/, "");
-	return p === "~" || p === "$HOME" || p === home || p === `/${home}`;
+function trimGlob(path: string): string {
+	return path.replace(/\/\*\*?$/, "").replace(/\/$/, "");
 }
 
-function isRootPath(path: string): boolean {
-	return /^\/\/?(\*\*?)?$/.test(path);
+/**
+ * Read・Edit のルールのパスがホーム全体を指すか。
+ * ルールでは `~/` がホーム、`//` がファイルシステムのルートから。`/path` は設定ファイルの場所からの相対パスなので含めない
+ */
+function isRuleHomePath(path: string): boolean {
+	const p = trimGlob(path);
+	return p === "~" || p === `/${homedir()}`;
+}
+
+/** Read・Edit のルールのパスがファイルシステム全体を指すか（`//`・`//*`・`//**`） */
+function isRuleRootPath(path: string): boolean {
+	return /^\/\/(\*\*?)?$/.test(path);
+}
+
+/** サンドボックスと追加の作業ディレクトリのパスがホームかルートを指すか。こちらは `/` がルート、`~` がホーム */
+function isPlainHomeOrRoot(path: string): boolean {
+	const p = trimGlob(path);
+	return path === "/" || p === "~" || p === homedir();
 }
 
 function assessPathRule(rule: string): Assessment | undefined {
@@ -345,7 +360,7 @@ function assessPathRule(rule: string): Assessment | undefined {
 	const tool = m[1];
 	const arg = m[2];
 
-	if (tool !== "Read" && (arg === undefined || arg === "*" || arg === "**")) {
+	if (tool !== "Read" && arg === undefined) {
 		return {
 			ruleId: "claude/edit-anywhere",
 			setting,
@@ -363,7 +378,7 @@ function assessPathRule(rule: string): Assessment | undefined {
 			},
 		};
 	}
-	if (tool === "Read" && (arg === undefined || arg === "*" || arg === "**")) {
+	if (tool === "Read" && arg === undefined) {
 		return {
 			ruleId: "claude/read-anywhere",
 			setting,
@@ -380,10 +395,11 @@ function assessPathRule(rule: string): Assessment | undefined {
 			},
 		};
 	}
-	if (arg === undefined) return undefined;
-	const wide = isHomePath(arg)
+	// Write(パス) のルールはどのファイルにも当たらない。別に「足すとよい設定」で消すよう勧める
+	if (arg === undefined || tool === "Write") return undefined;
+	const wide = isRuleHomePath(arg)
 		? "ホーム全体"
-		: isRootPath(arg)
+		: isRuleRootPath(arg)
 			? "ファイルシステム全体"
 			: undefined;
 	if (!wide) return undefined;
@@ -480,7 +496,7 @@ export function checkClaudeSettings(
 	for (const dir of stringArray(
 		get(settings, ["permissions", "additionalDirectories"]),
 	)) {
-		if (!isHomePath(dir) && dir !== "/") continue;
+		if (!isPlainHomeOrRoot(dir)) continue;
 		assessments.push({
 			ruleId: "claude/additional-directory-home",
 			setting: `permissions.additionalDirectories: "${dir}"`,
@@ -531,7 +547,7 @@ export function checkClaudeSettings(
 
 	const writePath = ["sandbox", "filesystem", "allowWrite"];
 	for (const path of stringArray(get(settings, writePath))) {
-		if (!isHomePath(path) && path !== "/") continue;
+		if (!isPlainHomeOrRoot(path)) continue;
 		assessments.push({
 			ruleId: "claude/sandbox-write-home",
 			usesFacts: true,
@@ -579,6 +595,19 @@ export function checkClaudeSettings(
 					values: networkDomains(ctx.facts),
 				},
 			],
+		});
+	}
+
+	const writeRules = allow.filter((rule) => /^Write\(.+\)$/s.test(rule));
+	if (writeRules.length > 0) {
+		recommendations.push({
+			ruleId: "claude/write-path-ineffective",
+			agent: "claude-code",
+			file: ctx.file,
+			summary: `効かない ${writeRules.join("・")} を消す。書き込みを許可したい場所は Edit(パス) で書く`,
+			reason:
+				"Write(パス) のルールはどのファイルにも当たらないため、書いてあっても許可にならず、読む人に誤解を与える",
+			patches: [{ op: "remove-from-array", path: ALLOW, values: writeRules }],
 		});
 	}
 

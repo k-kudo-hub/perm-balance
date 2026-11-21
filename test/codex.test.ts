@@ -1,4 +1,4 @@
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import { describe, expect, it } from "vitest";
 import { applyPatches } from "../src/patch.js";
 import type { ProjectFacts } from "../src/project.js";
@@ -228,5 +228,61 @@ describe("足すとよい設定", () => {
 	it("旧来の sandbox_mode を使っているときはプロファイルが効かないので勧めない", () => {
 		const toml = 'sandbox_mode = "workspace-write"\n';
 		expect(check(toml, { secretFiles: [".env"] }).recommendations).toEqual([]);
+	});
+});
+
+describe("sandbox_mode と default_permissions の併記", () => {
+	it("使われていない default_permissions のほうが広ければ、default_permissions を消す（権限を広げない）", () => {
+		const toml =
+			'sandbox_mode = "workspace-write"\ndefault_permissions = ":danger-full-access"\n';
+		const { findings } = check(toml);
+		expect(findings.map((f) => f.ruleId)).toEqual(["codex/profile-ignored"]);
+		expect(proposal(toml)).toEqual({ sandbox_mode: "workspace-write" });
+	});
+
+	it("read-only から :workspace に広げない", () => {
+		const toml =
+			'sandbox_mode = "read-only"\ndefault_permissions = ":workspace"\n';
+		expect(proposal(toml)).toEqual({ sandbox_mode: "read-only" });
+	});
+
+	it("プロファイルのほうが狭ければ、sandbox_mode を消して利用者のプロファイルを残す", () => {
+		const toml =
+			'sandbox_mode = "danger-full-access"\ndefault_permissions = "a"\n[permissions.a]\nextends = ":read-only"\n';
+		const { findings } = check(toml);
+		expect(findings.map((f) => f.ruleId)).toEqual(["codex/profile-ignored"]);
+		expect(proposal(toml)).toEqual({
+			default_permissions: "a",
+			permissions: { a: { extends: ":read-only" } },
+		});
+	});
+});
+
+describe("設定案を点検し直す", () => {
+	it("プロキシが有効で許可した宛先がなければ、外へ通信できないので指摘しない", () => {
+		const toml =
+			"[features]\nnetwork_proxy = true\n[permissions.dev.network]\nenabled = true\n";
+		expect(check(toml).findings).toEqual([]);
+	});
+
+	it("宛先の候補がなければネットワークを切る案を出し、その案には指摘が出ない", () => {
+		const toml = "[permissions.dev.network]\nenabled = true\n";
+		const noDomains = {
+			languages: [],
+			packageManager: undefined,
+			gitHosts: [],
+		};
+		const p = proposal(toml, noDomains);
+		expect(p).toEqual({
+			permissions: { dev: { network: { enabled: false } } },
+		});
+		expect(check(stringify(p), noDomains).findings).toEqual([]);
+	});
+
+	it("サンドボックスなしから作った案には、採用しない・狭めるの指摘が出ない", () => {
+		const p = proposal('sandbox_mode = "danger-full-access"\n');
+		expect(
+			check(stringify(p)).findings.filter((f) => f.verdict !== "keep"),
+		).toEqual([]);
 	});
 });

@@ -112,13 +112,19 @@ describe("homeWriteCandidates", () => {
 });
 
 describe("secretDenyGlobs", () => {
-	it("見つかった秘密情報の種類ごとに、拒否するパターンを返す", () => {
+	it("鍵はまとめ、それ以外はファイル名ごとに拒否するパターンを返す（見本のファイルは読めるまま）", () => {
 		const facts = readProjectFacts(
-			makeProject({ ".env": "", ".env.local": "", "a.key": "" }),
+			makeProject({
+				".env": "",
+				".env.local": "",
+				".env.example": "",
+				"a.key": "",
+				"b.key": "",
+			}),
 		);
 		expect(secretDenyGlobs(facts)).toEqual([
 			"**/.env",
-			"**/.env.*",
+			"**/.env.local",
 			"**/*.key",
 		]);
 	});

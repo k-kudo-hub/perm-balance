@@ -210,19 +210,20 @@ export function homeWriteCandidates(facts: ProjectFacts): string[] {
 	return dirs;
 }
 
-/** 見つかった秘密情報のファイルを読ませないためのパターン（gitignore 形式） */
+/**
+ * 見つかった秘密情報のファイルを読ませないためのパターン（gitignore 形式）。
+ * `.env.*` のようにまとめると見本のファイル（.env.example）まで読めなくなるため、鍵（.pem・.key）以外はファイル名ごとに書く
+ */
 export function secretDenyGlobs(facts: ProjectFacts): string[] {
-	const names = facts.secretFiles.map((p) => p.split("/").at(-1) ?? p);
-	const globs: string[] = [];
-	const add = (glob: string, match: (name: string) => boolean) => {
-		if (names.some(match)) globs.push(glob);
-	};
-	add("**/.env", (n) => n === ".env");
-	add("**/.env.*", (n) => n.startsWith(".env."));
-	add("**/*.pem", (n) => n.endsWith(".pem"));
-	add("**/*.key", (n) => n.endsWith(".key"));
-	add("**/id_rsa", (n) => n === "id_rsa");
-	add("**/id_ed25519", (n) => n === "id_ed25519");
-	add("**/credentials.json", (n) => n === "credentials.json");
-	return globs;
+	const names = [
+		...new Set(facts.secretFiles.map((p) => p.split("/").at(-1) ?? p)),
+	];
+	const exact = names
+		.filter((n) => !n.endsWith(".pem") && !n.endsWith(".key"))
+		.sort()
+		.map((n) => `**/${n}`);
+	const keys = [".pem", ".key"]
+		.filter((ext) => names.some((n) => n.endsWith(ext)))
+		.map((ext) => `**/*${ext}`);
+	return [...exact, ...keys];
 }

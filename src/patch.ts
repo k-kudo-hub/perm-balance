@@ -23,6 +23,16 @@ export function applyPatches<T>(config: T, patches: Patch[]): T {
 	for (const patch of patches) {
 		const last = patch.path.at(-1);
 		if (last === undefined) continue;
+		if (patch.op === "delete" || patch.op === "remove-from-array") {
+			// 消す変更では、ない階層を作らない
+			const existing = patch.path
+				.slice(0, -1)
+				.reduce<unknown>(
+					(cur, key) => (isObj(cur) ? cur[key] : undefined),
+					root,
+				);
+			if (!isObj(existing)) continue;
+		}
 		const parent = parentOf(root, patch.path);
 		switch (patch.op) {
 			case "set":

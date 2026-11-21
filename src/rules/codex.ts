@@ -15,16 +15,20 @@ import {
 	toFinding,
 } from "./common.js";
 
-const BUILTIN_PROFILES = new Set([
-	":read-only",
-	":workspace",
-	":danger-full-access",
-]);
+const BUILTIN_RANK: Record<string, number> = {
+	":read-only": 0,
+	":workspace": 1,
+	":danger-full-access": 2,
+};
+const SANDBOX_MODE_RANK: Record<string, number> = {
+	"read-only": 0,
+	"workspace-write": 1,
+	"danger-full-access": 2,
+};
 
 function isHomeOrRoot(path: string): boolean {
-	const home = homedir();
 	const p = path.replace(/\/$/, "");
-	return p === "~" || p === ":root" || p === home || path === "/";
+	return p === "~" || p === ":root" || p === homedir() || path === "/";
 }
 
 function customProfiles(config: unknown): Record<string, unknown> {
@@ -32,34 +36,54 @@ function customProfiles(config: unknown): Record<string, unknown> {
 	return isObj(permissions) ? permissions : {};
 }
 
-/** 新しく作るプロファイルの名前。既存のものと重ならないようにする */
-function newProfileName(config: unknown): string {
-	const existing = customProfiles(config);
-	return "project" in existing ? "project-narrow" : "project";
+/** プロファイルの広さ（0: 読むだけ・1: ワークスペースに書ける・2: 制限なし）。extends をたどって標準のプロファイルで決める */
+function profileRank(config: unknown, name: string): number {
+	let current: unknown = name;
+	for (let i = 0; i < 10 && typeof current === "string"; i++) {
+		const builtin = BUILTIN_RANK[current];
+		if (builtin !== undefined) return builtin;
+		current = get(customProfiles(config)[current], ["extends"]);
+	}
+	// extends がないプロファイルの土台は文書で決まっていないため、標準の :workspace と同じとみなす
+	return 1;
 }
 
-/** 宛先をこのプロジェクトのものに絞り、プロキシで強制するための変更 */
+/** 新しく作るプロファイルの名前。既存のものと重ならないようにする */
+function newProfileName(config: unknown): string {
+	return "project" in customProfiles(config) ? "project-narrow" : "project";
+}
+
+/**
+ * 宛先をこのプロジェクトのものに絞り、プロキシで強制するための変更。
+ * プロキシは許可した宛先がなければ外への通信を止めるため、宛先の候補がなければネットワークを切る
+ */
 function narrowNetwork(
 	profile: string,
 	ctx: RuleContext,
 	keepDomains: boolean,
 ): Patch[] {
 	const base = ["permissions", profile, "network"];
-	const patches: Patch[] = [
+	if (keepDomains)
+		return [{ op: "set", path: ["features", "network_proxy"], value: true }];
+	const domains = networkDomains(ctx.facts);
+	if (domains.length === 0) {
+		return [
+			{ op: "set", path: [...base, "enabled"], value: false },
+			{ op: "delete", path: [...base, "domains", "*"] },
+		];
+	}
+	return [
 		{ op: "set", path: [...base, "enabled"], value: true },
 		{ op: "set", path: ["features", "network_proxy"], value: true },
-	];
-	if (!keepDomains) {
-		patches.push({ op: "delete", path: [...base, "domains", "*"] });
-		for (const d of networkDomains(ctx.facts)) {
-			patches.push({
+		{ op: "delete", path: [...base, "domains", "*"] },
+		...domains.map(
+			(d): Patch => ({
 				op: "set",
 				path: [...base, "domains", d],
 				value: "allow",
-			});
-		}
-	}
-	return patches;
+			}),
+		),
+	];
 }
 
 /** サンドボックスなし・旧来の設定から、ワークスペースだけ書けて宛先を絞ったプロファイルに移す変更 */
@@ -84,6 +108,9 @@ function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 	];
 }
 
+const NETWORK_RISK =
+	"コマンドがどこへでも通信でき、読み込んだ指示に従って秘密情報を送るおそれがある";
+
 function checkProfile(
 	name: string,
 	profile: unknown,
@@ -91,13 +118,13 @@ function checkProfile(
 	ctx: RuleContext,
 ): Assessment[] {
 	const out: Assessment[] = [];
+	const fsPath = ["permissions", name, "filesystem"];
 	const fs = get(profile, ["filesystem"]);
 	if (isObj(fs)) {
 		for (const [path, value] of Object.entries(fs)) {
 			const writes =
 				value === "write" || (isObj(value) && value["."] === "write");
 			if (!writes || !isHomeOrRoot(path)) continue;
-			const fsPath = ["permissions", name, "filesystem"];
 			out.push({
 				ruleId: "codex/write-home",
 				usesFacts: true,
@@ -126,65 +153,154 @@ function checkProfile(
 	}
 
 	const network = get(profile, ["network"]);
-	if (isObj(network)) {
-		if (network.enabled === true) {
-			const domains = get(network, ["domains"]);
-			const allowAll = isObj(domains) && domains["*"] === "allow";
-			const hasAllow =
-				isObj(domains) && Object.values(domains).includes("allow");
-			const proxy = get(config, ["features", "network_proxy"]) === true;
-			if (allowAll || !hasAllow || !proxy) {
-				const why = allowAll
-					? '"*" = "allow" ですべての宛先を許可している'
-					: !hasAllow
-						? "宛先を決めずにネットワークを有効にしている"
-						: "宛先を絞っているが、[features] network_proxy を有効にしていないため、宛先の指定が効かない";
-				out.push({
-					ruleId: "codex/network-all",
-					usesFacts: true,
-					setting: `[permissions.${name}.network] enabled = true`,
-					risk: "high",
-					riskReason: `${why}。コマンドがどこへでも通信でき、読み込んだ指示に従って秘密情報を送るおそれがある`,
-					convenience: "high",
-					convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
-					suggestion: {
-						summary:
-							hasAllow && !allowAll
-								? "[features] network_proxy を有効にして、宛先の指定を効かせる"
-								: "このプロジェクトが使うパッケージレジストリと Git のホストだけを許可し、プロキシで強制する",
-						patches: narrowNetwork(name, ctx, hasAllow && !allowAll),
-					},
-				});
-			}
-		}
-		if (network.dangerously_allow_all_unix_sockets === true) {
+	if (!isObj(network)) return out;
+	if (network.enabled === true) {
+		const domains = get(network, ["domains"]);
+		const allowAll = isObj(domains) && domains["*"] === "allow";
+		const hasAllow = isObj(domains) && Object.values(domains).includes("allow");
+		const proxy = get(config, ["features", "network_proxy"]) === true;
+		// プロキシが有効で "*" を許可していなければ、通信できるのは許可した宛先だけ（許可がなければ外へは通信できない）
+		if (allowAll || !proxy) {
+			const why = allowAll
+				? '"*" = "allow" ですべての宛先を許可している'
+				: hasAllow
+					? "宛先を絞っているが、[features] network_proxy を有効にしていないため、宛先の指定が効かずすべての宛先に通信できる"
+					: "宛先を決めずにネットワークを有効にしており、[features] network_proxy も無効なため、すべての宛先に通信できる";
+			const keepDomains = hasAllow && !allowAll;
 			out.push({
-				ruleId: "codex/all-unix-sockets",
-				setting: `[permissions.${name}.network] dangerously_allow_all_unix_sockets = true`,
+				ruleId: "codex/network-all",
+				usesFacts: !keepDomains,
+				setting: `[permissions.${name}.network] enabled = true`,
 				risk: "high",
-				riskReason:
-					"Docker のソケットのような、つなぐだけでサンドボックスの外を操作できるソケットにも届く",
-				convenience: "low",
-				convenienceReason:
-					"使うソケットは限られ、[permissions.<名前>.network.unix_sockets] で個別に許可すれば足りる",
+				riskReason: `${why}。${NETWORK_RISK}`,
+				convenience: "high",
+				convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
 				suggestion: {
-					summary: "外して、使うソケットだけを unix_sockets で許可する",
-					patches: [
-						{
-							op: "delete",
-							path: [
-								"permissions",
-								name,
-								"network",
-								"dangerously_allow_all_unix_sockets",
-							],
-						},
-					],
+					summary: keepDomains
+						? "[features] network_proxy を有効にして、宛先の指定を効かせる"
+						: "このプロジェクトが使うパッケージレジストリと Git のホストだけを許可し、プロキシで強制する（宛先の候補がなければネットワークを切る）",
+					patches: narrowNetwork(name, ctx, keepDomains),
 				},
 			});
 		}
 	}
+	if (network.dangerously_allow_all_unix_sockets === true) {
+		out.push({
+			ruleId: "codex/all-unix-sockets",
+			setting: `[permissions.${name}.network] dangerously_allow_all_unix_sockets = true`,
+			risk: "high",
+			riskReason:
+				"Docker のソケットのような、つなぐだけでサンドボックスの外を操作できるソケットにも届く",
+			convenience: "low",
+			convenienceReason:
+				"使うソケットは限られ、[permissions.<名前>.network.unix_sockets] で個別に許可すれば足りる",
+			suggestion: {
+				summary: "外して、使うソケットだけを unix_sockets で許可する",
+				patches: [
+					{
+						op: "delete",
+						path: [
+							"permissions",
+							name,
+							"network",
+							"dangerously_allow_all_unix_sockets",
+						],
+					},
+				],
+			},
+		});
+	}
 	return out;
+}
+
+/** 旧来の sandbox_mode が効いているときの点検 */
+function checkLegacy(
+	config: unknown,
+	ctx: RuleContext,
+	sandboxMode: unknown,
+): Assessment[] {
+	const out: Assessment[] = [];
+	const approval = get(config, ["approval_policy"]);
+	if (sandboxMode === "danger-full-access") {
+		out.push(
+			fullAccess(
+				'sandbox_mode = "danger-full-access"',
+				approval,
+				migrateToProfile(config, ctx),
+			),
+		);
+		return out;
+	}
+	const legacy = get(config, ["sandbox_workspace_write"]);
+	if (sandboxMode !== "workspace-write" || !isObj(legacy)) return out;
+	if (legacy.network_access === true) {
+		out.push({
+			ruleId: "codex/legacy-network-all",
+			usesFacts: true,
+			setting: "[sandbox_workspace_write] network_access = true",
+			risk: "high",
+			riskReason: `旧来の設定では宛先を絞れない。${NETWORK_RISK}`,
+			convenience: "high",
+			convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
+			suggestion: {
+				summary:
+					"権限プロファイルに移し、このプロジェクトが使う宛先だけを許可する",
+				patches: migrateToProfile(config, ctx),
+			},
+		});
+	}
+	for (const root of stringArray(legacy.writable_roots)) {
+		if (!isHomeOrRoot(root)) continue;
+		const rootsPath = ["sandbox_workspace_write", "writable_roots"];
+		out.push({
+			ruleId: "codex/legacy-write-home",
+			usesFacts: true,
+			setting: `[sandbox_workspace_write] writable_roots = ["${root}"]`,
+			risk: "high",
+			riskReason:
+				"ホームかルートの下のどこにでも書き込めるため、シェルの設定や SSH の鍵を書き換えられる",
+			convenience: "medium",
+			convenienceReason: "ツールのキャッシュや設定の書き込みで止まらない",
+			suggestion: {
+				summary:
+					"外して、このプロジェクトのツールが使うキャッシュの場所だけを加える",
+				patches: [
+					{ op: "remove-from-array", path: rootsPath, values: [root] },
+					{
+						op: "add-to-array",
+						path: rootsPath,
+						values: homeWriteCandidates(ctx.facts),
+					},
+				],
+			},
+		});
+	}
+	return out;
+}
+
+function fullAccess(
+	setting: string,
+	approval: unknown,
+	patches: Patch[],
+): Assessment {
+	const noApproval =
+		approval === "never"
+			? '。approval_policy = "never" と組み合わさり、実行前の確認もない'
+			: "";
+	return {
+		ruleId: "codex/danger-full-access",
+		usesFacts: true,
+		setting,
+		risk: "high",
+		riskReason: `サンドボックスを使わず、ファイルシステム全体への書き込みとすべての宛先への通信を許す${noApproval}`,
+		convenience: "high",
+		convenienceReason: "書き込み先や通信で止まらずに作業できる",
+		suggestion: {
+			summary:
+				"ワークスペースだけを書き込み可にする :workspace を土台に、このプロジェクトが使う宛先だけ通信を許すプロファイルにする",
+			patches,
+		},
+	};
 }
 
 export function checkCodexConfig(
@@ -194,107 +310,61 @@ export function checkCodexConfig(
 	const assessments: Assessment[] = [];
 	const sandboxMode = get(config, ["sandbox_mode"]);
 	const defaultPermissions = get(config, ["default_permissions"]);
-	const approval = get(config, ["approval_policy"]);
+	const dp =
+		typeof defaultPermissions === "string" ? defaultPermissions : undefined;
 
-	const fullAccess =
-		sandboxMode === "danger-full-access"
-			? 'sandbox_mode = "danger-full-access"'
-			: defaultPermissions === ":danger-full-access" &&
-					sandboxMode === undefined
-				? 'default_permissions = ":danger-full-access"'
-				: undefined;
-	if (fullAccess) {
-		const noApproval =
-			approval === "never"
-				? '。approval_policy = "never" と組み合わさり、実行前の確認もない'
-				: "";
-		assessments.push({
-			ruleId: "codex/danger-full-access",
-			usesFacts: true,
-			setting: fullAccess,
-			risk: "high",
-			riskReason: `サンドボックスを使わず、ファイルシステム全体への書き込みとすべての宛先への通信を許す${noApproval}`,
-			convenience: "high",
-			convenienceReason: "書き込み先や通信で止まらずに作業できる",
-			suggestion: {
-				summary:
-					"ワークスペースだけを書き込み可にする :workspace を土台に、このプロジェクトが使う宛先だけ通信を許すプロファイルにする",
-				patches: migrateToProfile(config, ctx),
-			},
-		});
+	// sandbox_mode があると default_permissions は使われない。両方あるときは、広いほうを消して狭いほうを効かせる
+	let legacyEffective = sandboxMode !== undefined;
+	if (dp !== undefined && typeof sandboxMode === "string") {
+		const profileWider =
+			profileRank(config, dp) > (SANDBOX_MODE_RANK[sandboxMode] ?? 1);
+		legacyEffective = profileWider;
+		const setting = `default_permissions = "${dp}" と sandbox_mode = "${sandboxMode}"`;
+		assessments.push(
+			profileWider
+				? {
+						ruleId: "codex/profile-ignored",
+						setting,
+						risk: "medium",
+						riskReason:
+							"効いているのは sandbox_mode で、使われていない default_permissions のほうが広い。sandbox_mode を消すと権限が広がる",
+						convenience: "low",
+						convenienceReason: "使われていない設定を残しても得られるものはない",
+						suggestion: {
+							summary: "使われていない default_permissions を消す",
+							patches: [{ op: "delete", path: ["default_permissions"] }],
+						},
+					}
+				: {
+						ruleId: "codex/profile-ignored",
+						setting,
+						risk: "medium",
+						riskReason:
+							"sandbox_mode があると default_permissions のプロファイルは使われないため、書いたプロファイルの制限が効いていない",
+						convenience: "low",
+						convenienceReason: "両方を書いても得られるものはない",
+						suggestion: {
+							summary:
+								"旧来の sandbox_mode と [sandbox_workspace_write] を消し、プロファイルを効かせる",
+							patches: [
+								{ op: "delete", path: ["sandbox_mode"] },
+								{ op: "delete", path: ["sandbox_workspace_write"] },
+							],
+						},
+					},
+		);
 	}
 
-	const legacy = get(config, ["sandbox_workspace_write"]);
-	if (!fullAccess && sandboxMode === "workspace-write" && isObj(legacy)) {
-		if (legacy.network_access === true) {
-			assessments.push({
-				ruleId: "codex/legacy-network-all",
-				usesFacts: true,
-				setting: "[sandbox_workspace_write] network_access = true",
-				risk: "high",
-				riskReason: "宛先を問わず通信できる。旧来の設定では宛先を絞れない",
-				convenience: "high",
-				convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
-				suggestion: {
-					summary:
-						"権限プロファイルに移し、このプロジェクトが使う宛先だけを許可する",
-					patches: migrateToProfile(config, ctx),
-				},
-			});
-		}
-		for (const root of stringArray(legacy.writable_roots)) {
-			if (!isHomeOrRoot(root)) continue;
-			assessments.push({
-				ruleId: "codex/legacy-write-home",
-				usesFacts: true,
-				setting: `[sandbox_workspace_write] writable_roots = ["${root}"]`,
-				risk: "high",
-				riskReason:
-					"ホームかルートの下のどこにでも書き込めるため、シェルの設定や SSH の鍵を書き換えられる",
-				convenience: "medium",
-				convenienceReason: "ツールのキャッシュや設定の書き込みで止まらない",
-				suggestion: {
-					summary:
-						"外して、このプロジェクトのツールが使うキャッシュの場所だけを加える",
-					patches: [
-						{
-							op: "remove-from-array",
-							path: ["sandbox_workspace_write", "writable_roots"],
-							values: [root],
-						},
-						{
-							op: "add-to-array",
-							path: ["sandbox_workspace_write", "writable_roots"],
-							values: homeWriteCandidates(ctx.facts),
-						},
-					],
-				},
-			});
-		}
-	}
-
-	if (
-		defaultPermissions !== undefined &&
-		sandboxMode !== undefined &&
-		!fullAccess
-	) {
-		assessments.push({
-			ruleId: "codex/profile-ignored",
-			setting: `default_permissions = "${String(defaultPermissions)}" と sandbox_mode = "${String(sandboxMode)}"`,
-			risk: "medium",
-			riskReason:
-				"sandbox_mode があると default_permissions のプロファイルは使われないため、書いた制限が効いていない",
-			convenience: "low",
-			convenienceReason: "両方を書いても得られるものはない",
-			suggestion: {
-				summary:
-					"旧来の sandbox_mode と [sandbox_workspace_write] を消し、プロファイルを効かせる",
-				patches: [
-					{ op: "delete", path: ["sandbox_mode"] },
-					{ op: "delete", path: ["sandbox_workspace_write"] },
-				],
-			},
-		});
+	if (legacyEffective) {
+		assessments.push(...checkLegacy(config, ctx, sandboxMode));
+	} else if (dp === ":danger-full-access") {
+		assessments.push(
+			fullAccess(
+				'default_permissions = ":danger-full-access"',
+				get(config, ["approval_policy"]),
+				migrateToProfile(config, ctx),
+			),
+		);
 	}
 
 	for (const [name, profile] of Object.entries(customProfiles(config))) {
@@ -305,20 +375,28 @@ export function checkCodexConfig(
 	const globs = secretDenyGlobs(ctx.facts);
 	if (
 		ctx.scope === "project" &&
-		sandboxMode === undefined &&
+		!legacyEffective &&
+		dp !== ":danger-full-access" &&
 		globs.length > 0
 	) {
-		const active =
-			typeof defaultPermissions === "string" ? defaultPermissions : undefined;
-		const useActive = active !== undefined && !BUILTIN_PROFILES.has(active);
-		const name = useActive ? active : newProfileName(config);
+		const useActive = dp !== undefined && BUILTIN_RANK[dp] === undefined;
+		const name = useActive ? dp : newProfileName(config);
 		const rootsPath = ["permissions", name, "filesystem", ":workspace_roots"];
 		const existing = useActive ? get(config, rootsPath) : undefined;
 		const missing = globs.filter(
 			(g) => !(isObj(existing) && existing[g] === "deny"),
 		);
 		if (missing.length > 0) {
-			const parent = active === ":read-only" ? ":read-only" : ":workspace";
+			const create: Patch[] = useActive
+				? []
+				: [
+						{ op: "set", path: ["default_permissions"], value: name },
+						{
+							op: "set",
+							path: ["permissions", name, "extends"],
+							value: dp === ":read-only" ? ":read-only" : ":workspace",
+						},
+					];
 			recommendations.push({
 				ruleId: "codex/deny-secrets",
 				agent: "codex",
@@ -327,20 +405,7 @@ export function checkCodexConfig(
 				reason:
 					"作業で秘密情報を読む必要はほとんどなく、拒否しても利便性はほとんど落ちない",
 				patches: [
-					...(useActive
-						? []
-						: [
-								{
-									op: "set",
-									path: ["default_permissions"],
-									value: name,
-								} as Patch,
-								{
-									op: "set",
-									path: ["permissions", name, "extends"],
-									value: parent,
-								} as Patch,
-							]),
+					...create,
 					...missing.map(
 						(g): Patch => ({
 							op: "set",

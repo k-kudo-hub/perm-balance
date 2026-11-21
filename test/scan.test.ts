@@ -120,3 +120,42 @@ describe("ユーザー全体の設定", () => {
 		);
 	});
 });
+
+describe("設定案を点検し直す", () => {
+	it("設定案に置き換えて点検し直すと、採用しない・狭めるの指摘が出ない", () => {
+		const root = makeDir({
+			"package.json": JSON.stringify({ scripts: { test: "vitest" } }),
+			".env": "",
+			".claude/settings.json": JSON.stringify({
+				permissions: {
+					allow: [
+						"Bash(*)",
+						"Bash(rm *)",
+						"Edit",
+						"Read",
+						"WebFetch",
+						"Bash(git push *)",
+					],
+				},
+				sandbox: {
+					network: { allowedDomains: ["*"] },
+					filesystem: { allowWrite: ["~"] },
+				},
+			}),
+			".codex/config.toml":
+				'default_permissions = "dev"\n[permissions.dev.filesystem]\n"~" = "write"\n[permissions.dev.network]\nenabled = true\n',
+		});
+		const home = makeDir({});
+		const first = scan({ root, home, includeUser: false, files: [] });
+		writeFileSync(
+			join(root, ".claude/settings.json"),
+			first[0]?.proposal ?? "",
+		);
+		writeFileSync(join(root, ".codex/config.toml"), first[1]?.proposal ?? "");
+		const second = scan({ root, home, includeUser: false, files: [] });
+		for (const report of second) {
+			expect(report.findings.filter((f) => f.verdict !== "keep")).toEqual([]);
+			expect(report.recommendations).toEqual([]);
+		}
+	});
+});

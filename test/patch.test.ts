@@ -53,4 +53,12 @@ describe("applyPatches", () => {
 		]);
 		expect(result).toEqual({ permissions: {} });
 	});
+
+	it("消す変更では、ない階層を作らない", () => {
+		const result = applyPatches({ a: 1 }, [
+			{ op: "delete", path: ["x", "y", "z"] },
+			{ op: "remove-from-array", path: ["p", "q"], values: ["v"] },
+		]);
+		expect(result).toEqual({ a: 1 });
+	});
 });

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import type { ProjectFacts } from "../src/project.js";
 import { checkClaudeSettings } from "../src/rules/claude.js";
@@ -260,5 +261,63 @@ describe("足すとよい設定", () => {
 		expect(
 			recommendations.find((x) => x.ruleId === "claude/deny-secrets"),
 		).toBeUndefined();
+	});
+});
+
+describe("パスの書き方", () => {
+	it("/ で始まるパスは設定ファイルの場所からの相対パスなので、ルートやホームとみなさない", () => {
+		expect(check({ permissions: { allow: ["Edit(/**)"] } }).findings).toEqual(
+			[],
+		);
+		expect(
+			check({ permissions: { allow: [`Edit(${homedir()}/**)`] } }).findings,
+		).toEqual([]);
+	});
+
+	it("// で始まるパスはルートからなので、ホームを指していれば採用しない", () => {
+		expect(
+			verdictOf(
+				{ permissions: { allow: [`Edit(/${homedir()}/**)`] } },
+				"Edit(",
+			),
+		).toBe("reject");
+	});
+
+	it("括弧付きの Edit(**) は作業ディレクトリの中なので指摘しない", () => {
+		expect(
+			check({ permissions: { allow: ["Edit(**)", "Read(**)"] } }).findings,
+		).toEqual([]);
+	});
+
+	it("サンドボックスの allowWrite では / がルート", () => {
+		const { findings } = check({
+			sandbox: { enabled: true, filesystem: { allowWrite: ["/"] } },
+		});
+		expect(findings[0]?.ruleId).toBe("claude/sandbox-write-home");
+	});
+});
+
+describe("効かないルールと引数の固定", () => {
+	it("Write(パス) は効かないので、危険とは判定せず消すよう勧める", () => {
+		const { findings, recommendations } = check({
+			permissions: { allow: ["Write(~/**)"] },
+		});
+		expect(findings).toEqual([]);
+		expect(
+			recommendations.find((r) => r.ruleId === "claude/write-path-ineffective")
+				?.patches,
+		).toEqual([
+			{
+				op: "remove-from-array",
+				path: ["permissions", "allow"],
+				values: ["Write(~/**)"],
+			},
+		]);
+	});
+
+	it("外に影響する操作は、引数を固定していても確認に移す", () => {
+		expect(
+			verdictOf({ permissions: { allow: ["Bash(git push)"] } }, "git push"),
+		).toBe("narrow");
 	});
 });
