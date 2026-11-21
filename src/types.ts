@@ -58,6 +58,10 @@ export interface FileReport {
 	recommendations: Recommendation[];
 	/** 指摘と推奨をすべて反映した設定案。変更がなければ undefined */
 	proposal?: string;
+	/** 設定案のうち、変わるトップレベルのキーだけを抜き出したもの */
+	proposalChanges?: string;
+	/** 設定案で消えるトップレベルのキー */
+	removedKeys?: string[];
 	/** 読めなかったときの理由 */
 	error?: string;
 }

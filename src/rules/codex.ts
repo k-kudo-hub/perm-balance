@@ -150,7 +150,6 @@ function checkProfile(
 			if (!writes || !isHomeOrRoot(path)) continue;
 			out.push({
 				ruleId: "codex/write-home",
-				usesFacts: true,
 				setting: `[permissions.${name}.filesystem] "${path}" = "write"`,
 				risk: "high",
 				riskReason:
@@ -192,7 +191,6 @@ function checkProfile(
 			const keepDomains = hasAllow && !allowAll;
 			out.push({
 				ruleId: "codex/network-all",
-				usesFacts: !keepDomains,
 				setting: `[permissions.${name}.network] enabled = true`,
 				risk: "high",
 				riskReason: `${why}。${NETWORK_RISK}`,
@@ -259,7 +257,6 @@ function checkLegacy(
 	if (legacy.network_access === true) {
 		out.push({
 			ruleId: "codex/legacy-network-all",
-			usesFacts: true,
 			setting: "[sandbox_workspace_write] network_access = true",
 			risk: "high",
 			riskReason: `旧来の設定では宛先を絞れない。${NETWORK_RISK}`,
@@ -277,7 +274,6 @@ function checkLegacy(
 		const rootsPath = ["sandbox_workspace_write", "writable_roots"];
 		out.push({
 			ruleId: "codex/legacy-write-home",
-			usesFacts: true,
 			setting: `[sandbox_workspace_write] writable_roots = ["${root}"]`,
 			risk: "high",
 			riskReason:
@@ -312,7 +308,6 @@ function fullAccess(
 			: "";
 	return {
 		ruleId: "codex/danger-full-access",
-		usesFacts: true,
 		setting,
 		risk: "high",
 		riskReason: `サンドボックスを使わず、ファイルシステム全体への書き込みとすべての宛先への通信を許す${noApproval}`,

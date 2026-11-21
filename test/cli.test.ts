@@ -108,3 +108,47 @@ describe("cli", () => {
 		expect(err).toContain("使い方");
 	});
 });
+
+describe("設定案の表示", () => {
+	const WITH_HOOKS = {
+		".claude/settings.json": JSON.stringify({
+			permissions: { allow: ["Bash(rm *)"] },
+			hooks: { Stop: [{ hooks: [{ type: "command", command: "echo done" }] }] },
+		}),
+		".codex/config.toml":
+			'model = "gpt-5"\nsandbox_mode = "danger-full-access"\n',
+	};
+
+	it("既定では変わる部分だけを表示し、権限と関係のない設定は出さない", () => {
+		const { out } = run([], makeDir(WITH_HOOKS));
+		expect(out).toContain("変わる部分だけ");
+		expect(out).not.toContain("echo done");
+		expect(out).not.toContain('model = "gpt-5"');
+		expect(out).toContain("消す設定: sandbox_mode");
+	});
+
+	it("--full-proposal ではファイル全体を表示する", () => {
+		const { out } = run(["--full-proposal"], makeDir(WITH_HOOKS));
+		expect(out).toContain("echo done");
+		expect(out).toContain('model = "gpt-5"');
+	});
+});
+
+describe("ユーザー全体の設定", () => {
+	it("プロジェクト固有の値を案に入れない理由を、ファイルごとに1回だけ表示する", () => {
+		const root = makeDir({});
+		const home = makeDir({
+			".claude/settings.json": JSON.stringify({
+				permissions: { allow: ["Bash", "Bash(git:*)"] },
+			}),
+		});
+		let out = "";
+		main(["--user"], {
+			cwd: root,
+			home,
+			stdout: (s) => (out += s),
+			stderr: () => {},
+		});
+		expect(out.split("各プロジェクトの設定で許可する").length - 1).toBe(1);
+	});
+});

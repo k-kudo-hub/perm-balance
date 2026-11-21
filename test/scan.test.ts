@@ -115,7 +115,7 @@ describe("ユーザー全体の設定", () => {
 			"Bash(git diff *)",
 			"Bash(git log *)",
 		]);
-		expect(report?.findings[0]?.suggestion?.summary).toContain(
+		expect(report?.findings[0]?.suggestion?.summary).not.toContain(
 			"各プロジェクトの設定で許可する",
 		);
 	});

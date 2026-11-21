@@ -29,8 +29,6 @@ export interface Assessment {
 	convenience: Level;
 	convenienceReason: string;
 	suggestion?: Suggestion;
-	/** 狭めた案をプロジェクトのファイル構成から作っている */
-	usesFacts?: boolean;
 }
 
 /** ユーザー全体の設定はすべてのプロジェクトに効くため、プロジェクト固有の値を案に入れない */
@@ -42,19 +40,10 @@ export function toFinding(
 	ctx: RuleContext,
 	a: Assessment,
 ): Finding {
-	const { usesFacts, ...rest } = a;
-	const suggestion =
-		a.suggestion && usesFacts && ctx.scope === "user"
-			? {
-					...a.suggestion,
-					summary: `${a.suggestion.summary}。${USER_SCOPE_NOTE}`,
-				}
-			: a.suggestion;
 	return {
 		agent,
 		file: ctx.file,
-		...rest,
-		suggestion,
+		...a,
 		verdict: decideVerdict(a.risk, a.convenience),
 	};
 }

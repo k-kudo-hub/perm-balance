@@ -21,6 +21,7 @@ AI エージェント（Claude Code・Codex）の権限設定を、リスクと�
   --file <パス>     このファイルも点検する（.toml は Codex、それ以外は Claude Code として読む）。何度でも指定できる
   --json            結果を JSON で出す
   --no-proposal     狭めた設定案を表示しない
+  --full-proposal   狭めた設定案を、変わる部分だけでなくファイル全体で表示する
   -h, --help        この使い方を表示する
 
 終了コード:
@@ -65,7 +66,12 @@ export function main(argv: string[], io: Io): number {
 	if (values.json) {
 		io.stdout(`${JSON.stringify({ files: reports, summary }, null, 2)}\n`);
 	} else {
-		io.stdout(renderText(reports, !values["no-proposal"]));
+		const mode = values["no-proposal"]
+			? "none"
+			: values["full-proposal"]
+				? "full"
+				: "changes";
+		io.stdout(renderText(reports, mode));
 	}
 	const errors = reports.filter((r) => r.error);
 	for (const r of errors)
@@ -83,6 +89,7 @@ function parseOptions(argv: string[]) {
 			file: { type: "string", multiple: true },
 			json: { type: "boolean" },
 			"no-proposal": { type: "boolean" },
+			"full-proposal": { type: "boolean" },
 			help: { type: "boolean", short: "h" },
 		},
 	});

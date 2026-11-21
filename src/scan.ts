@@ -119,14 +119,29 @@ export function scan(opts: ScanOptions): FileReport[] {
 				.flatMap((f) => f.suggestion?.patches ?? []),
 			...result.recommendations.flatMap((r) => r.patches),
 		];
-		let proposal: string | undefined;
-		if (patches.length > 0) {
-			const proposed = applyPatches(config, patches) as Record<string, unknown>;
-			proposal =
-				target.agent === "codex"
-					? stringify(proposed)
-					: `${JSON.stringify(proposed, null, 2)}\n`;
-		}
-		return { ...base, ...result, proposal };
+		if (patches.length === 0) return { ...base, ...result };
+		const original = config as Record<string, unknown>;
+		const proposed = applyPatches(original, patches);
+		const format = (obj: Record<string, unknown>) =>
+			target.agent === "codex"
+				? stringify(obj)
+				: `${JSON.stringify(obj, null, 2)}\n`;
+		const changed = Object.fromEntries(
+			Object.entries(proposed).filter(
+				([key, value]) =>
+					JSON.stringify(original[key]) !== JSON.stringify(value),
+			),
+		);
+		const removedKeys = Object.keys(original).filter(
+			(key) => !(key in proposed),
+		);
+		return {
+			...base,
+			...result,
+			proposal: format(proposed),
+			proposalChanges:
+				Object.keys(changed).length > 0 ? format(changed) : undefined,
+			removedKeys,
+		};
 	});
 }
