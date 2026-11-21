@@ -29,10 +29,34 @@ export interface Assessment {
 	convenience: Level;
 	convenienceReason: string;
 	suggestion?: Suggestion;
+	/** 狭めた案をプロジェクトのファイル構成から作っている */
+	usesFacts?: boolean;
 }
 
-export function toFinding(agent: Agent, file: string, a: Assessment): Finding {
-	return { agent, file, ...a, verdict: decideVerdict(a.risk, a.convenience) };
+/** ユーザー全体の設定はすべてのプロジェクトに効くため、プロジェクト固有の値を案に入れない */
+export const USER_SCOPE_NOTE =
+	"ユーザー全体の設定はすべてのプロジェクトに効くため、案にはプロジェクト固有のコマンド・宛先・書き込み先を入れていない。それらは各プロジェクトの設定で許可する";
+
+export function toFinding(
+	agent: Agent,
+	ctx: RuleContext,
+	a: Assessment,
+): Finding {
+	const { usesFacts, ...rest } = a;
+	const suggestion =
+		a.suggestion && usesFacts && ctx.scope === "user"
+			? {
+					...a.suggestion,
+					summary: `${a.suggestion.summary}。${USER_SCOPE_NOTE}`,
+				}
+			: a.suggestion;
+	return {
+		agent,
+		file: ctx.file,
+		...rest,
+		suggestion,
+		verdict: decideVerdict(a.risk, a.convenience),
+	};
 }
 
 export function isObj(value: unknown): value is Record<string, unknown> {

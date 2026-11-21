@@ -125,6 +125,19 @@ function readGitHosts(root: string): string[] {
 	return hosts;
 }
 
+/** ユーザー全体の設定を点検するときに使う、プロジェクト固有の事実を持たない値 */
+export function emptyFacts(root: string): ProjectFacts {
+	return {
+		root,
+		languages: [],
+		scripts: [],
+		makeTargets: [],
+		pythonTools: [],
+		secretFiles: [],
+		gitHosts: [],
+	};
+}
+
 export function readProjectFacts(root: string): ProjectFacts {
 	const has = (name: string) => existsSync(join(root, name));
 	const manifests: Record<Language, boolean> = {

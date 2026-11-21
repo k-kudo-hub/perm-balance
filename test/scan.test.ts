@@ -97,3 +97,26 @@ describe("scan", () => {
 		expect(report?.findings).toEqual([]);
 	});
 });
+
+describe("ユーザー全体の設定", () => {
+	it("プロジェクト固有のコマンドを案に入れず、その理由を添える", () => {
+		const root = makeDir({
+			"package.json": JSON.stringify({ scripts: { test: "vitest" } }),
+		});
+		const home = makeDir({
+			".claude/settings.json": JSON.stringify({
+				permissions: { allow: ["Bash(*)"] },
+			}),
+		});
+		const [report] = scan({ root, home, includeUser: true, files: [] });
+		const proposed = JSON.parse(report?.proposal ?? "{}");
+		expect(proposed.permissions.allow).toEqual([
+			"Bash(git status *)",
+			"Bash(git diff *)",
+			"Bash(git log *)",
+		]);
+		expect(report?.findings[0]?.suggestion?.summary).toContain(
+			"各プロジェクトの設定で許可する",
+		);
+	});
+});

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { applyPatches } from "./patch.js";
-import { readProjectFacts } from "./project.js";
+import { emptyFacts, readProjectFacts } from "./project.js";
 import { checkClaudeSettings } from "./rules/claude.js";
 import { checkCodexConfig } from "./rules/codex.js";
 import type { RuleResult } from "./rules/common.js";
@@ -104,7 +104,11 @@ export function scan(opts: ScanOptions): FileReport[] {
 		} catch (e) {
 			return { ...base, error: e instanceof Error ? e.message : String(e) };
 		}
-		const ctx = { file, scope: target.scope, facts };
+		const ctx = {
+			file,
+			scope: target.scope,
+			facts: target.scope === "user" ? emptyFacts(opts.root) : facts,
+		};
 		const result: RuleResult =
 			target.agent === "codex"
 				? checkCodexConfig(config, ctx)

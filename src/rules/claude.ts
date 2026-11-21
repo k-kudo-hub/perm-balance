@@ -14,6 +14,7 @@ import {
 	type RuleResult,
 	stringArray,
 	toFinding,
+	USER_SCOPE_NOTE,
 } from "./common.js";
 
 const ALLOW = ["permissions", "allow"];
@@ -187,6 +188,7 @@ function assessBash(
 	if (pattern === "*" || pattern === "") {
 		return {
 			ruleId: "claude/bash-all",
+			usesFacts: true,
 			setting,
 			risk: "high",
 			riskReason:
@@ -241,6 +243,7 @@ function assessBash(
 	if (INTERPRETERS.has(head)) {
 		return {
 			ruleId: "claude/bash-interpreter",
+			usesFacts: true,
 			setting,
 			risk: "high",
 			riskReason:
@@ -290,6 +293,7 @@ function assessBash(
 	if (MULTI_TOOLS.has(head) && /^\S+\s+\*$/.test(pattern)) {
 		return {
 			ruleId: "claude/bash-any-subcommand",
+			usesFacts: true,
 			setting,
 			risk: "high",
 			riskReason: `${head} のすべてのサブコマンドを含むため、公開・削除・強制上書きのような操作まで確認なしで実行できる`,
@@ -486,6 +490,7 @@ export function checkClaudeSettings(
 	if (stringArray(get(settings, domainsPath)).includes("*")) {
 		assessments.push({
 			ruleId: "claude/sandbox-network-all",
+			usesFacts: true,
 			setting: 'sandbox.network.allowedDomains: "*"',
 			risk: "high",
 			riskReason:
@@ -512,6 +517,7 @@ export function checkClaudeSettings(
 		if (!isHomePath(path) && path !== "/") continue;
 		assessments.push({
 			ruleId: "claude/sandbox-write-home",
+			usesFacts: true,
 			setting: `sandbox.filesystem.allowWrite: "${path}"`,
 			risk: "high",
 			riskReason:
@@ -542,8 +548,7 @@ export function checkClaudeSettings(
 			file: ctx.file,
 			summary:
 				"サンドボックスを有効にし、サンドボックスの中の Bash は確認なしで実行する",
-			reason:
-				"コマンドを確認なしで動かす利便性を保ったまま、書き込み先とネットワークを OS の仕組みで制限できる",
+			reason: `コマンドを確認なしで動かす利便性を保ったまま、書き込み先とネットワークを OS の仕組みで制限できる${ctx.scope === "user" ? `。${USER_SCOPE_NOTE}` : ""}`,
 			patches: [
 				{ op: "set", path: ["sandbox", "enabled"], value: true },
 				{
@@ -585,7 +590,7 @@ export function checkClaudeSettings(
 	}
 
 	return {
-		findings: assessments.map((a) => toFinding("claude-code", ctx.file, a)),
+		findings: assessments.map((a) => toFinding("claude-code", ctx, a)),
 		recommendations,
 	};
 }

@@ -100,6 +100,7 @@ function checkProfile(
 			const fsPath = ["permissions", name, "filesystem"];
 			out.push({
 				ruleId: "codex/write-home",
+				usesFacts: true,
 				setting: `[permissions.${name}.filesystem] "${path}" = "write"`,
 				risk: "high",
 				riskReason:
@@ -140,6 +141,7 @@ function checkProfile(
 						: "宛先を絞っているが、[features] network_proxy を有効にしていないため、宛先の指定が効かない";
 				out.push({
 					ruleId: "codex/network-all",
+					usesFacts: true,
 					setting: `[permissions.${name}.network] enabled = true`,
 					risk: "high",
 					riskReason: `${why}。コマンドがどこへでも通信でき、読み込んだ指示に従って秘密情報を送るおそれがある`,
@@ -208,6 +210,7 @@ export function checkCodexConfig(
 				: "";
 		assessments.push({
 			ruleId: "codex/danger-full-access",
+			usesFacts: true,
 			setting: fullAccess,
 			risk: "high",
 			riskReason: `サンドボックスを使わず、ファイルシステム全体への書き込みとすべての宛先への通信を許す${noApproval}`,
@@ -226,6 +229,7 @@ export function checkCodexConfig(
 		if (legacy.network_access === true) {
 			assessments.push({
 				ruleId: "codex/legacy-network-all",
+				usesFacts: true,
 				setting: "[sandbox_workspace_write] network_access = true",
 				risk: "high",
 				riskReason: "宛先を問わず通信できる。旧来の設定では宛先を絞れない",
@@ -242,6 +246,7 @@ export function checkCodexConfig(
 			if (!isHomeOrRoot(root)) continue;
 			assessments.push({
 				ruleId: "codex/legacy-write-home",
+				usesFacts: true,
 				setting: `[sandbox_workspace_write] writable_roots = ["${root}"]`,
 				risk: "high",
 				riskReason:
@@ -349,7 +354,7 @@ export function checkCodexConfig(
 	}
 
 	return {
-		findings: assessments.map((a) => toFinding("codex", ctx.file, a)),
+		findings: assessments.map((a) => toFinding("codex", ctx, a)),
 		recommendations,
 	};
 }
