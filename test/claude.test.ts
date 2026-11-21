@@ -142,6 +142,12 @@ describe("ファイルとネットワークの許可", () => {
 		});
 	});
 
+	it("場所を限らない Read の許可は採用しない（作業ディレクトリの中はもともと確認なしで読める）", () => {
+		const { findings } = check({ permissions: { allow: ["Read"] } });
+		expect(findings[0]?.ruleId).toBe("claude/read-anywhere");
+		expect(findings[0]?.verdict).toBe("reject");
+	});
+
 	it("ホーム全体の読み取り許可は採用しない", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["Read(~/**)"] } }, "Read(~/**)"),

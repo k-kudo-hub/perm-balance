@@ -363,6 +363,23 @@ function assessPathRule(rule: string): Assessment | undefined {
 			},
 		};
 	}
+	if (tool === "Read" && (arg === undefined || arg === "*" || arg === "**")) {
+		return {
+			ruleId: "claude/read-anywhere",
+			setting,
+			risk: "medium",
+			riskReason:
+				"作業ディレクトリの外も確認なしで読めるため、SSH の鍵やクラウドの認証情報まで読み込める",
+			convenience: "low",
+			convenienceReason:
+				"作業ディレクトリの中の読み取りは、この許可がなくても確認なしで行える",
+			suggestion: {
+				summary:
+					"許可から外す。外のファイルを読ませたいときはディレクトリを個別に許可する",
+				patches: [remove],
+			},
+		};
+	}
 	if (arg === undefined) return undefined;
 	const wide = isHomePath(arg)
 		? "ホーム全体"
