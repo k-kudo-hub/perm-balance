@@ -199,7 +199,10 @@ describe("recommended additions", () => {
 			permissions: {
 				project: {
 					extends: ":workspace",
-					filesystem: { ":workspace_roots": { "**/.env": "deny" } },
+					filesystem: {
+						glob_scan_max_depth: 3,
+						":workspace_roots": { "**/.env": "deny" },
+					},
 				},
 			},
 		});
@@ -214,7 +217,10 @@ describe("recommended additions", () => {
 		expect(p.permissions).toEqual({
 			dev: {
 				extends: ":workspace",
-				filesystem: { ":workspace_roots": { "**/.env": "deny" } },
+				filesystem: {
+					glob_scan_max_depth: 3,
+					":workspace_roots": { "**/.env": "deny" },
+				},
 			},
 		});
 	});
@@ -438,5 +444,51 @@ describe("home or root as a workspace root", () => {
 		const toml =
 			'[permissions.dev]\nextends = ":workspace"\n[permissions.dev.workspace_roots]\n"~" = true\n[permissions.dev.filesystem.":workspace_roots"]\n"." = "read"\n';
 		expect(check(toml).findings).toEqual([]);
+	});
+});
+
+describe("dangerously_* network keys", () => {
+	it("rejects dangerously_allow_non_loopback_proxy in a profile", () => {
+		const toml =
+			"[permissions.dev.network]\ndangerously_allow_non_loopback_proxy = true\n";
+		const f = check(toml).findings.find(
+			(x) => x.ruleId === "codex/non-loopback-proxy",
+		);
+		expect(f?.verdict).toBe("reject");
+		expect(proposal(toml)).toEqual({
+			permissions: { dev: { network: {} } },
+		});
+	});
+
+	it("rejects both keys in the [features.network_proxy] table", () => {
+		const toml =
+			"[features.network_proxy]\nenabled = true\ndangerously_allow_all_unix_sockets = true\ndangerously_allow_non_loopback_proxy = true\n";
+		const { findings } = check(toml);
+		expect(findings.map((f) => [f.ruleId, f.setting, f.verdict])).toEqual([
+			[
+				"codex/all-unix-sockets",
+				"[features.network_proxy] dangerously_allow_all_unix_sockets = true",
+				"reject",
+			],
+			[
+				"codex/non-loopback-proxy",
+				"[features.network_proxy] dangerously_allow_non_loopback_proxy = true",
+				"reject",
+			],
+		]);
+		expect(proposal(toml)).toEqual({
+			features: { network_proxy: { enabled: true } },
+		});
+	});
+});
+
+describe("glob_scan_max_depth for deny globs", () => {
+	it("keeps an existing glob_scan_max_depth", () => {
+		const toml =
+			'default_permissions = "dev"\n[permissions.dev.filesystem]\nglob_scan_max_depth = 5\n';
+		const p = proposal(toml, { secretFiles: [".env"] }) as {
+			permissions: { dev: { filesystem: Record<string, unknown> } };
+		};
+		expect(p.permissions.dev.filesystem.glob_scan_max_depth).toBe(5);
 	});
 });

@@ -79,8 +79,11 @@ function isSecretName(name: string): boolean {
 }
 
 /** Looks for secret-looking files up to depth 2 */
+/** How many path segments deep secret files are searched for (`.env`, `a/.env`, `a/b/.env`) */
+export const SECRET_SCAN_DEPTH = 3;
+
 function findSecretFiles(root: string, rel = "", depth = 0): string[] {
-	if (depth > 2) return [];
+	if (depth >= SECRET_SCAN_DEPTH) return [];
 	let entries: import("node:fs").Dirent[];
 	try {
 		entries = readdirSync(join(root, rel), { withFileTypes: true });

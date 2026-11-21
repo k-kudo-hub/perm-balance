@@ -2,9 +2,10 @@ import { homedir } from "node:os";
 import {
 	homeWriteCandidates,
 	networkDomains,
+	SECRET_SCAN_DEPTH,
 	secretDenyGlobs,
 } from "../project.js";
-import type { Patch, Recommendation } from "../types.js";
+import type { Patch, Recommendation, Suggestion } from "../types.js";
 import {
 	type Assessment,
 	get,
@@ -211,6 +212,56 @@ function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 const NETWORK_RISK =
 	"Commands can reach any host, and may send secrets out by following instructions they read";
 
+/**
+ * The dangerously_* network keys, which the docs call escape hatches for specialized environments
+ * that "should not be used for ordinary local development". They can be set in a profile's network table
+ * or in the [features.network_proxy] table
+ */
+function checkDangerousNetworkKeys(
+	table: Record<string, unknown>,
+	path: string[],
+	label: string,
+): Assessment[] {
+	const out: Assessment[] = [];
+	const remove = (key: string): Suggestion["patches"] => [
+		{ op: "delete", path: [...path, key] },
+	];
+	if (table.dangerously_allow_all_unix_sockets === true) {
+		out.push({
+			ruleId: "codex/all-unix-sockets",
+			setting: `${label} dangerously_allow_all_unix_sockets = true`,
+			risk: "high",
+			riskReason:
+				"Reaches sockets such as Docker's, which control things outside the sandbox just by connecting",
+			convenience: "low",
+			convenienceReason:
+				"Only a few sockets are needed, and [permissions.<name>.network.unix_sockets] can allow them one by one",
+			suggestion: {
+				summary:
+					"Remove it and allow only the sockets you use with unix_sockets",
+				patches: remove("dangerously_allow_all_unix_sockets"),
+			},
+		});
+	}
+	if (table.dangerously_allow_non_loopback_proxy === true) {
+		out.push({
+			ruleId: "codex/non-loopback-proxy",
+			setting: `${label} dangerously_allow_non_loopback_proxy = true`,
+			risk: "medium",
+			riskReason:
+				"Lets the proxy listen beyond localhost, so other machines on the network can reach it and send traffic through your allowed destinations",
+			convenience: "low",
+			convenienceReason:
+				"Commands in the sandbox reach the proxy on localhost, so ordinary local development does not need it",
+			suggestion: {
+				summary: "Remove it so the proxy listens only on localhost",
+				patches: remove("dangerously_allow_non_loopback_proxy"),
+			},
+		});
+	}
+	return out;
+}
+
 function checkProfile(
 	name: string,
 	profile: unknown,
@@ -335,33 +386,13 @@ function checkProfile(
 			});
 		}
 	}
-	if (network.dangerously_allow_all_unix_sockets === true) {
-		out.push({
-			ruleId: "codex/all-unix-sockets",
-			setting: `[permissions.${name}.network] dangerously_allow_all_unix_sockets = true`,
-			risk: "high",
-			riskReason:
-				"Reaches sockets such as Docker's, which control things outside the sandbox just by connecting",
-			convenience: "low",
-			convenienceReason:
-				"Only a few sockets are needed, and [permissions.<name>.network.unix_sockets] can allow them one by one",
-			suggestion: {
-				summary:
-					"Remove it and allow only the sockets you use with unix_sockets",
-				patches: [
-					{
-						op: "delete",
-						path: [
-							"permissions",
-							name,
-							"network",
-							"dangerously_allow_all_unix_sockets",
-						],
-					},
-				],
-			},
-		});
-	}
+	out.push(
+		...checkDangerousNetworkKeys(
+			network,
+			["permissions", name, "network"],
+			`[permissions.${name}.network]`,
+		),
+	);
 	return out;
 }
 
@@ -518,6 +549,17 @@ export function checkCodexConfig(
 		);
 	}
 
+	const proxyTable = get(config, ["features", "network_proxy"]);
+	if (isObj(proxyTable)) {
+		assessments.push(
+			...checkDangerousNetworkKeys(
+				proxyTable,
+				["features", "network_proxy"],
+				"[features.network_proxy]",
+			),
+		);
+	}
+
 	for (const [name, profile] of Object.entries(customProfiles(config))) {
 		assessments.push(...checkProfile(name, profile, config, ctx));
 	}
@@ -548,6 +590,18 @@ export function checkCodexConfig(
 							value: dp === ":read-only" ? ":read-only" : ":workspace",
 						},
 					];
+			// On Linux, WSL and native Windows, an unbounded ** deny pattern needs bounded pre-expansion.
+			// Use the depth perm-balance scans for secret files, and keep a value the user already set
+			const depthPath = [
+				"permissions",
+				name,
+				"filesystem",
+				"glob_scan_max_depth",
+			];
+			const depth: Patch[] =
+				useActive && get(config, depthPath) !== undefined
+					? []
+					: [{ op: "set", path: depthPath, value: SECRET_SCAN_DEPTH }];
 			recommendations.push({
 				ruleId: "codex/deny-secrets",
 				agent: "codex",
@@ -557,6 +611,7 @@ export function checkCodexConfig(
 					"Work rarely needs to read secrets, so denying them costs almost nothing",
 				patches: [
 					...create,
+					...depth,
 					...missing.map(
 						(g): Patch => ({
 							op: "set",
