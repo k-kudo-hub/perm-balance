@@ -286,3 +286,24 @@ describe("設定案を点検し直す", () => {
 		).toEqual([]);
 	});
 });
+
+describe("併記で通信の広さも比べる", () => {
+	it("通信できない旧来の設定より、通信できるプロファイルのほうが広ければ、プロファイルを消す", () => {
+		const toml = [
+			'sandbox_mode = "workspace-write"',
+			'default_permissions = "a"',
+			"[features]",
+			"network_proxy = true",
+			"[permissions.a]",
+			'extends = ":workspace"',
+			"[permissions.a.network]",
+			"enabled = true",
+			"[permissions.a.network.domains]",
+			'"github.com" = "allow"',
+			"",
+		].join("\n");
+		const p = proposal(toml) as Record<string, unknown>;
+		expect(p.sandbox_mode).toBe("workspace-write");
+		expect(p.default_permissions).toBeUndefined();
+	});
+});

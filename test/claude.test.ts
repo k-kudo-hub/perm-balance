@@ -321,3 +321,15 @@ describe("効かないルールと引数の固定", () => {
 		).toBe("narrow");
 	});
 });
+
+describe("Write(*)", () => {
+	it("括弧なしの Write と同じく、場所を限らない書き込みとして狭める", () => {
+		const { findings, recommendations } = check({
+			permissions: { allow: ["Write(*)"] },
+		});
+		expect(findings[0]?.ruleId).toBe("claude/edit-anywhere");
+		expect(
+			recommendations.find((r) => r.ruleId === "claude/write-path-ineffective"),
+		).toBeUndefined();
+	});
+});

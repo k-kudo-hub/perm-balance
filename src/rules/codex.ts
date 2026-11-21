@@ -48,6 +48,29 @@ function profileRank(config: unknown, name: string): number {
 	return 1;
 }
 
+/** プロファイルで通信できるか。extends をたどり、最初に network.enabled を書いたものか標準のプロファイルで決める */
+function profileNetwork(config: unknown, name: string): boolean {
+	let current: unknown = name;
+	for (let i = 0; i < 10 && typeof current === "string"; i++) {
+		if (current === ":danger-full-access") return true;
+		if (BUILTIN_RANK[current] !== undefined) return false;
+		const profile = customProfiles(config)[current];
+		const enabled = get(profile, ["network", "enabled"]);
+		if (typeof enabled === "boolean") return enabled;
+		current = get(profile, ["extends"]);
+	}
+	return false;
+}
+
+/** 旧来の設定で通信できるか */
+function legacyNetwork(config: unknown, sandboxMode: string): boolean {
+	if (sandboxMode === "danger-full-access") return true;
+	return (
+		sandboxMode === "workspace-write" &&
+		get(config, ["sandbox_workspace_write", "network_access"]) === true
+	);
+}
+
 /** 新しく作るプロファイルの名前。既存のものと重ならないようにする */
 function newProfileName(config: unknown): string {
 	return "project" in customProfiles(config) ? "project-narrow" : "project";
@@ -316,8 +339,10 @@ export function checkCodexConfig(
 	// sandbox_mode があると default_permissions は使われない。両方あるときは、広いほうを消して狭いほうを効かせる
 	let legacyEffective = sandboxMode !== undefined;
 	if (dp !== undefined && typeof sandboxMode === "string") {
+		// 書き込みの範囲か通信のどちらかでプロファイルのほうが広ければ、プロファイルを消す
 		const profileWider =
-			profileRank(config, dp) > (SANDBOX_MODE_RANK[sandboxMode] ?? 1);
+			profileRank(config, dp) > (SANDBOX_MODE_RANK[sandboxMode] ?? 1) ||
+			(profileNetwork(config, dp) && !legacyNetwork(config, sandboxMode));
 		legacyEffective = profileWider;
 		const setting = `default_permissions = "${dp}" と sandbox_mode = "${sandboxMode}"`;
 		assessments.push(

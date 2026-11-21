@@ -360,7 +360,10 @@ function assessPathRule(rule: string): Assessment | undefined {
 	const tool = m[1];
 	const arg = m[2];
 
-	if (tool !== "Read" && arg === undefined) {
+	if (
+		(tool === "Edit" && arg === undefined) ||
+		(tool === "Write" && (arg === undefined || arg === "*"))
+	) {
 		return {
 			ruleId: "claude/edit-anywhere",
 			setting,
@@ -598,7 +601,10 @@ export function checkClaudeSettings(
 		});
 	}
 
-	const writeRules = allow.filter((rule) => /^Write\(.+\)$/s.test(rule));
+	// Write(パス) は効かない。`*` だけは括弧なしの Write と同じく、すべてに当たる
+	const writeRules = allow.filter(
+		(rule) => /^Write\(.+\)$/s.test(rule) && rule !== "Write(*)",
+	);
 	if (writeRules.length > 0) {
 		recommendations.push({
 			ruleId: "claude/write-path-ineffective",
