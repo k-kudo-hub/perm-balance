@@ -36,16 +36,47 @@ function customProfiles(config: unknown): Record<string, unknown> {
 	return isObj(permissions) ? permissions : {};
 }
 
-/** How broad a profile is (0: read-only, 1: can write the workspace, 2: unrestricted), resolved by following `extends` to a built-in profile */
-function profileRank(config: unknown, name: string): number {
+interface ProfileChain {
+	/** Named profiles from the given one to its farthest parent */
+	profiles: unknown[];
+	/** The built-in profile the chain ends at, if any */
+	builtin?: string;
+}
+
+/** Follows `extends` from a profile to a built-in profile or to a profile without `extends` */
+function profileChain(config: unknown, name: string): ProfileChain {
+	const profiles: unknown[] = [];
 	let current: unknown = name;
 	for (let i = 0; i < 10 && typeof current === "string"; i++) {
-		const builtin = BUILTIN_RANK[current];
-		if (builtin !== undefined) return builtin;
-		current = get(customProfiles(config)[current], ["extends"]);
+		if (BUILTIN_RANK[current] !== undefined)
+			return { profiles, builtin: current };
+		const profile = customProfiles(config)[current];
+		profiles.push(profile);
+		current = get(profile, ["extends"]);
 	}
-	// The docs do not define the base of a profile without `extends`, so treat it like the built-in :workspace
-	return 1;
+	return { profiles };
+}
+
+/** Whether a filesystem table grants `write` anywhere, including nested subpaths */
+function grantsWrite(filesystem: unknown): boolean {
+	if (!isObj(filesystem)) return false;
+	return Object.values(filesystem).some(
+		(v) => v === "write" || (isObj(v) && Object.values(v).includes("write")),
+	);
+}
+
+/**
+ * How broad a profile is (0: read-only, 1: can write somewhere, 2: unrestricted).
+ * A profile starts from its built-in parent, or from no access when it has no `extends`
+ * ("Missing or empty filesystem tables keep filesystem access restricted"), and `write` entries add writes on top
+ */
+function profileRank(config: unknown, name: string): number {
+	const chain = profileChain(config, name);
+	const base = chain.builtin ? (BUILTIN_RANK[chain.builtin] ?? 0) : 0;
+	const writes = chain.profiles.some((p) =>
+		grantsWrite(get(p, ["filesystem"])),
+	);
+	return writes ? Math.max(base, 1) : base;
 }
 
 /** Whether a profile allows network access, resolved by following `extends` to the first profile that sets network.enabled, or to a built-in profile */

@@ -329,3 +329,35 @@ describe("[features.network_proxy] as a table", () => {
 		});
 	});
 });
+
+describe("write scope of a profile when compared with sandbox_mode", () => {
+	it("treats a profile without extends as granting only what its filesystem table lists", () => {
+		const toml = [
+			'sandbox_mode = "read-only"',
+			'default_permissions = "a"',
+			"[permissions.a.filesystem]",
+			'":minimal" = "read"',
+			'[permissions.a.filesystem.":workspace_roots"]',
+			'"." = "read"',
+			"",
+		].join("\n");
+		const p = proposal(toml) as Record<string, unknown>;
+		expect(p.sandbox_mode).toBeUndefined();
+		expect(p.default_permissions).toBe("a");
+	});
+
+	it("counts write entries added on top of a read-only parent", () => {
+		const toml = [
+			'sandbox_mode = "read-only"',
+			'default_permissions = "a"',
+			"[permissions.a]",
+			'extends = ":read-only"',
+			'[permissions.a.filesystem.":workspace_roots"]',
+			'"." = "write"',
+			"",
+		].join("\n");
+		const p = proposal(toml) as Record<string, unknown>;
+		expect(p.sandbox_mode).toBe("read-only");
+		expect(p.default_permissions).toBeUndefined();
+	});
+});
