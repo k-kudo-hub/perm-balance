@@ -397,7 +397,10 @@ function checkProfile(
 			const keepDomains = hasAllow && !allowAll;
 			out.push({
 				ruleId: "codex/network-all",
-				setting: `[permissions.${name}.network] enabled = true`,
+				setting:
+					network.enabled === true
+						? `[permissions.${name}.network] enabled = true`
+						: `[permissions.${name}.network.domains] (enabled = true inherited through extends)`,
 				risk: "high",
 				riskReason: `${why}. ${NETWORK_RISK}`,
 				convenience: "high",
@@ -672,7 +675,15 @@ export function checkCodexConfig(
 	}
 
 	return {
-		findings: assessments.map((a) => toFinding("codex", ctx, a)),
+		// Children inheriting the same parent setting can produce the same finding; report it once
+		findings: assessments
+			.filter(
+				(a, i) =>
+					assessments.findIndex(
+						(b) => b.ruleId === a.ruleId && b.setting === a.setting,
+					) === i,
+			)
+			.map((a) => toFinding("codex", ctx, a)),
 		recommendations,
 	};
 }

@@ -510,7 +510,10 @@ describe("more rules inherited through extends", () => {
 		].join("\n");
 		const { findings } = check(toml);
 		expect(findings.map((f) => [f.ruleId, f.setting])).toEqual([
-			["codex/network-all", "[permissions.dev.network] enabled = true"],
+			[
+				"codex/network-all",
+				"[permissions.dev.network.domains] (enabled = true inherited through extends)",
+			],
 		]);
 		expect(check(stringify(proposal(toml))).findings).toEqual([]);
 	});
@@ -585,5 +588,28 @@ describe("writes to the whole home or root when compared with sandbox_mode", () 
 		const p = proposal(toml) as Record<string, unknown>;
 		expect(p.sandbox_mode).toBe("workspace-write");
 		expect(p.default_permissions).toBeUndefined();
+	});
+});
+
+describe("one finding per setting", () => {
+	it("reports a parent's home workspace root once when two writable children inherit it", () => {
+		const toml = [
+			"[permissions.base]",
+			'extends = ":read-only"',
+			"[permissions.base.workspace_roots]",
+			'"~" = true',
+			"[permissions.a]",
+			'extends = "base"',
+			'[permissions.a.filesystem.":workspace_roots"]',
+			'"." = "write"',
+			"[permissions.b]",
+			'extends = "base"',
+			'[permissions.b.filesystem.":workspace_roots"]',
+			'"." = "write"',
+			"",
+		].join("\n");
+		expect(check(toml).findings.map((f) => f.setting)).toEqual([
+			'[permissions.base.workspace_roots] "~" = true',
+		]);
 	});
 });
