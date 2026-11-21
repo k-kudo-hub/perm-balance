@@ -54,8 +54,11 @@ perm-balance は、危険度に加えて**その設定が何の役に立って�
 Node.js 20 以上が必要です。
 
 ```bash
-# GitHub から直接実行する
-npx github:k-kudo-hub/perm-balance
+# いまいるディレクトリを点検する
+npx perm-balance
+
+# 別のプロジェクトを点検する
+npx perm-balance /path/to/your/project
 
 # 手元に置いて実行する
 git clone https://github.com/k-kudo-hub/perm-balance.git
