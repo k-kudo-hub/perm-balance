@@ -1,18 +1,18 @@
-/** 3段階の度合い。リスクと利便性の両方に使う */
+/** A three-step level, used for both risk and convenience */
 export type Level = "low" | "medium" | "high";
 
 /**
- * 判定。著者の主張「最小から渡す。ただし最終的にはリスクと利便性のバランスで決める」に沿って、
- * リスクと利便性の組み合わせから決まる（`decideVerdict`）。
+ * The verdict. Following the author's position (start from the least privilege, but in the end decide by balancing risk and convenience),
+ * it is decided from the combination of risk and convenience (`decideVerdict`).
  */
 export type Verdict = "reject" | "narrow" | "keep";
 
 export type Agent = "claude-code" | "codex";
 
-/** 設定ファイルの持ち主。ユーザー全体の設定か、プロジェクトの設定か */
+/** Who owns the settings file: user-wide or the project */
 export type Scope = "user" | "project";
 
-/** 設定オブジェクトへの変更。狭めた設定案を作るのに使う */
+/** A change to a settings object, used to build the narrowed proposal */
 export type Patch =
 	| { op: "set"; path: string[]; value: unknown }
 	| { op: "delete"; path: string[] }
@@ -20,9 +20,9 @@ export type Patch =
 	| { op: "remove-from-array"; path: string[]; values: unknown[] };
 
 export interface Suggestion {
-	/** 何をどう変えるかの説明 */
+	/** What to change and how */
 	summary: string;
-	/** 設定案に反映する変更。説明だけで自動の変更がないときは空 */
+	/** Changes applied to the proposal. Empty when there is only advice */
 	patches: Patch[];
 }
 
@@ -30,7 +30,7 @@ export interface Finding {
 	ruleId: string;
 	agent: Agent;
 	file: string;
-	/** 指摘した設定（例: `permissions.allow: "Bash(*)"`） */
+	/** The flagged setting (e.g. `permissions.allow: "Bash(*)"`) */
 	setting: string;
 	risk: Level;
 	riskReason: string;
@@ -40,7 +40,7 @@ export interface Finding {
 	suggestion?: Suggestion;
 }
 
-/** 利便性をほとんど損なわずにリスクを下げられる、足すとよい設定 */
+/** A change worth adding: it lowers risk at almost no cost to convenience */
 export interface Recommendation {
 	ruleId: string;
 	agent: Agent;
@@ -56,12 +56,12 @@ export interface FileReport {
 	scope: Scope;
 	findings: Finding[];
 	recommendations: Recommendation[];
-	/** 指摘と推奨をすべて反映した設定案。変更がなければ undefined */
+	/** The proposal with every finding and recommendation applied. undefined when nothing changes */
 	proposal?: string;
-	/** 設定案のうち、変わるトップレベルのキーだけを抜き出したもの */
+	/** Only the top-level keys of the proposal that change */
 	proposalChanges?: string;
-	/** 設定案で消えるトップレベルのキー */
+	/** Top-level keys the proposal removes */
 	removedKeys?: string[];
-	/** 読めなかったときの理由 */
+	/** Why the file could not be read */
 	error?: string;
 }

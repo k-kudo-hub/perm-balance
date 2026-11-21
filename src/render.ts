@@ -1,19 +1,23 @@
 import { USER_SCOPE_NOTE } from "./rules/common.js";
 import type { FileReport, Finding, Level, Verdict } from "./types.js";
 
-/** 設定案の表示: 変わる部分だけ・ファイル全体・表示しない */
+/** How to print the proposal: only what changes, the whole file, or not at all */
 export type ProposalMode = "changes" | "full" | "none";
 
-const LEVEL: Record<Level, string> = { high: "高", medium: "中", low: "低" };
+const LEVEL: Record<Level, string> = {
+	high: "high",
+	medium: "medium",
+	low: "low",
+};
 const AGENT = { "claude-code": "Claude Code", codex: "Codex" } as const;
 const SCOPE = {
-	user: "ユーザー全体の設定",
-	project: "プロジェクトの設定",
+	user: "user-wide settings",
+	project: "project settings",
 } as const;
 const VERDICT_LABEL: Record<Verdict, string> = {
-	reject: "✖ 採用しない",
-	narrow: "▲ 狭める",
-	keep: "✔ 許可してよい",
+	reject: "✖ Reject",
+	narrow: "▲ Narrow",
+	keep: "✔ OK to allow",
 };
 
 export interface Summary {
@@ -45,8 +49,8 @@ function indent(text: string, prefix: string): string {
 function renderFinding(f: Finding): string {
 	const lines = [
 		`${VERDICT_LABEL[f.verdict]}  ${f.setting}`,
-		`    リスク ${LEVEL[f.risk]}    ${f.riskReason}`,
-		`    利便性 ${LEVEL[f.convenience]}    ${f.convenienceReason}`,
+		`    Risk ${LEVEL[f.risk].padEnd(6)}        ${f.riskReason}`,
+		`    Convenience ${LEVEL[f.convenience].padEnd(6)} ${f.convenienceReason}`,
 	];
 	if (f.suggestion) lines.push(`    → ${f.suggestion.summary}`);
 	return lines.join("\n");
@@ -54,18 +58,18 @@ function renderFinding(f: Finding): string {
 
 function renderFile(report: FileReport, mode: ProposalMode): string {
 	const out = [
-		`━━ ${report.file}（${AGENT[report.agent]}・${SCOPE[report.scope]}）`,
+		`━━ ${report.file} (${AGENT[report.agent]}, ${SCOPE[report.scope]})`,
 		"",
 	];
 	if (report.error) {
-		out.push(`読めませんでした: ${report.error}`, "");
+		out.push(`Could not read: ${report.error}`, "");
 		return out.join("\n");
 	}
 	if (
 		report.scope === "user" &&
 		(report.findings.length > 0 || report.recommendations.length > 0)
 	) {
-		out.push(`※ ${USER_SCOPE_NOTE}`, "");
+		out.push(`Note: ${USER_SCOPE_NOTE}`, "");
 	}
 	const headerLines = out.length;
 	const order: Verdict[] = ["reject", "narrow"];
@@ -74,33 +78,33 @@ function renderFile(report: FileReport, mode: ProposalMode): string {
 			out.push(renderFinding(f), "");
 	}
 	for (const r of report.recommendations) {
-		out.push(`＋ 足すとよい  ${r.summary}`, `    理由: ${r.reason}`, "");
+		out.push(`+ Consider adding  ${r.summary}`, `    Why: ${r.reason}`, "");
 	}
 	const keep = report.findings.filter((f) => f.verdict === "keep");
 	if (keep.length > 0) {
-		out.push("✔ 許可してよい（リスクが小さく、利便性が大きい）");
+		out.push("✔ OK to allow (low risk, real convenience)");
 		for (const f of keep) out.push(`    ${f.setting}`);
 		out.push("");
 	}
-	if (out.length === headerLines) out.push("指摘はありません", "");
+	if (out.length === headerLines) out.push("No findings", "");
 	if (mode === "full" && report.proposal) {
 		const note =
-			report.agent === "codex" ? "。TOML のコメントは引き継がれません" : "";
+			report.agent === "codex" ? ". TOML comments are not preserved" : "";
 		out.push(
-			`狭めた設定案（${report.file} をこの内容にする${note}）:`,
+			`Narrowed proposal (replace ${report.file} with this${note}):`,
 			"",
 			indent(report.proposal, "    "),
 			"",
 		);
 	} else if (mode === "changes" && report.proposal) {
 		out.push(
-			`狭めた設定案（変わる部分だけ。ほかの設定はそのまま。ファイル全体は --full-proposal で表示）:`,
+			`Narrowed proposal (only what changes; everything else stays. Use --full-proposal for the whole file):`,
 			"",
 		);
 		if (report.proposalChanges)
 			out.push(indent(report.proposalChanges, "    "), "");
 		if (report.removedKeys && report.removedKeys.length > 0) {
-			out.push(`    消す設定: ${report.removedKeys.join("・")}`, "");
+			out.push(`    Remove: ${report.removedKeys.join(", ")}`, "");
 		}
 	}
 	return out.join("\n");
@@ -108,12 +112,12 @@ function renderFile(report: FileReport, mode: ProposalMode): string {
 
 export function renderText(reports: FileReport[], mode: ProposalMode): string {
 	const header =
-		"perm-balance: 権限は最小から渡し、リスクと利便性のバランスで判断します\n\n";
+		"perm-balance: start from the least privilege, then decide by balancing risk and convenience\n\n";
 	if (reports.length === 0) {
-		return `${header}点検する設定ファイルが見つかりません（.claude/settings.json・.claude/settings.local.json・.codex/config.toml）。ユーザー全体の設定を点検するには --user を付けてください。\n`;
+		return `${header}No settings file found (.claude/settings.json, .claude/settings.local.json, .codex/config.toml). Add --user to check user-wide settings.\n`;
 	}
 	const s = summarize(reports);
 	const body = reports.map((r) => renderFile(r, mode)).join("\n");
-	const footer = `━━ まとめ: 採用しない ${s.reject}件・狭める ${s.narrow}件・許可してよい ${s.keep}件・足すとよい ${s.recommendations}件\n`;
+	const footer = `━━ Summary: ${s.reject} reject, ${s.narrow} narrow, ${s.keep} OK to allow, ${s.recommendations} consider adding\n`;
 	return `${header}${body}\n${footer}`;
 }

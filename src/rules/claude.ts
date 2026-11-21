@@ -62,7 +62,7 @@ const INTERPRETERS = new Set([
 	"env",
 	"xargs",
 ]);
-/** サブコマンドを限らずに許すと、危ういサブコマンドまで含んでしまうツール */
+/** Tools whose dangerous subcommands are included when no subcommand is specified */
 const MULTI_TOOLS = new Set([
 	"git",
 	"npm",
@@ -79,7 +79,7 @@ const MULTI_TOOLS = new Set([
 	"terraform",
 	"make",
 ]);
-/** 外（リモート・クラスタ・公開先）に影響する操作 */
+/** Operations that affect things outside (remotes, clusters, registries) */
 const OUTWARD = [
 	"git push",
 	"git reset",
@@ -97,7 +97,7 @@ const OUTWARD = [
 	"gh pr merge",
 	"gh repo delete",
 ];
-/** 依存の追加（サプライチェーンの入口） */
+/** Adding dependencies (the supply-chain entry point) */
 const INSTALL = [
 	"npm install",
 	"npm i",
@@ -113,7 +113,7 @@ const INSTALL = [
 	"go install",
 	"brew install",
 ];
-/** 読むだけか、リポジトリに閉じた作業 */
+/** Read-only, or work contained in the repository */
 const SAFE = [
 	"git status",
 	"git diff",
@@ -140,12 +140,12 @@ const SAFE = [
 	"go vet",
 ];
 
-/** `Bash(...)` の中身を返す。Bash のルールでなければ undefined。`Bash` 単体は `*` とみなす */
+/** Returns the inside of `Bash(...)`, or undefined if it is not a Bash rule. A bare `Bash` counts as `*` */
 function bashPattern(rule: string): string | undefined {
 	if (rule === "Bash") return "*";
 	const m = /^Bash\((.*)\)$/s.exec(rule);
 	if (!m) return undefined;
-	// `ls:*` は `ls *` と同じ（末尾だけ）
+	// `ls:*` equals `ls *` (only at the end)
 	return (m[1] ?? "").replace(/:\*$/, " *").trim();
 }
 
@@ -190,18 +190,18 @@ function assessBash(
 			setting,
 			risk: "high",
 			riskReason:
-				"削除・送信・権限の変更を含む、どんなコマンドでも確認なしで実行できる",
+				"Any command runs without confirmation, including deleting files, sending data and changing permissions",
 			convenience: "high",
-			convenienceReason: "コマンドのたびに確認で止まらずに済む",
+			convenienceReason: "Never stops to confirm a command",
 			suggestion: {
 				summary:
-					"このプロジェクトで使うコマンド（スクリプト・ビルド・テスト・Git の読み取り）だけを許可する。確認なしで動かしたいなら、サンドボックスを有効にする（下の「足すとよい設定」）",
+					"Allow only the commands this project uses (scripts, builds, tests, read-only Git). To run commands without confirmation, enable the sandbox (see 'Consider adding' below)",
 				patches: replaceWithCandidates,
 			},
 		};
 	}
 
-	// 引数を固定したコマンド（`*` を含まない）は範囲が決まっているので指摘しない
+	// Commands with fixed arguments (no `*`) have a fixed scope, so they are not flagged
 	const outwardExact = OUTWARD.find((c) => startsWithCommand(pattern, c));
 	if (!pattern.includes("*") && !outwardExact) return undefined;
 
@@ -213,12 +213,12 @@ function assessBash(
 			setting,
 			risk: "high",
 			riskReason:
-				"ファイルの削除や権限の変更を、引数を問わず確認なしで実行できる",
+				"Deletes files or changes permissions with any arguments, without confirmation",
 			convenience: "low",
 			convenienceReason:
-				"必要な場面は少なく、その都度確認しても作業はほとんど止まらない",
+				"Rarely needed, so confirming each time barely slows work",
 			suggestion: {
-				summary: "許可から外す（実行するときに確認を求める）",
+				summary: "Remove it from allow (you will be asked each time)",
 				patches: [remove],
 			},
 		};
@@ -229,12 +229,12 @@ function assessBash(
 			setting,
 			risk: "high",
 			riskReason:
-				"任意の宛先へデータを送れる。読み込んだページに書かれた指示に従って、秘密情報を外に送るおそれがある",
+				"Can send data to any host, and may send secrets out by following instructions on a page it read",
 			convenience: "medium",
-			convenienceReason: "Web の情報を取りに行く場面で確認が減る",
+			convenienceReason: "Fewer confirmations when fetching from the web",
 			suggestion: {
 				summary:
-					"許可から外す。Web を読むだけなら WebFetch(domain:…) で宛先を決めて許可し、コマンドに通信させたいならサンドボックスの network.allowedDomains で宛先を絞る",
+					"Remove it from allow. To read the web, allow specific sites with WebFetch(domain:…). For commands that need the network, restrict hosts with the sandbox's network.allowedDomains",
 				patches: [remove],
 			},
 		};
@@ -245,12 +245,11 @@ function assessBash(
 			setting,
 			risk: "high",
 			riskReason:
-				"任意のコードを実行できるため、すべてのコマンドを許可したのと変わらない",
+				"Runs arbitrary code, which is the same as allowing every command",
 			convenience: "high",
-			convenienceReason: "スクリプトやツールを確認なしで動かせる",
+			convenienceReason: "Runs scripts and tools without confirmation",
 			suggestion: {
-				summary:
-					"このプロジェクトのスクリプト・ビルド・テストのコマンドだけを許可する",
+				summary: "Allow only this project's script, build and test commands",
 				patches: replaceWithCandidates,
 			},
 		};
@@ -261,12 +260,11 @@ function assessBash(
 			ruleId: "claude/bash-outward",
 			setting,
 			risk: "high",
-			riskReason: `${outward} はリモート・公開先・クラスタに影響し、取り消しにくい`,
+			riskReason: `${outward} affects remotes, registries or clusters and is hard to undo`,
 			convenience: "medium",
-			convenienceReason: "実行の回数は多くないが、毎回の確認の手間は減る",
+			convenienceReason: "Not run often, but saves a confirmation each time",
 			suggestion: {
-				summary:
-					"許可（allow）から確認（ask）に移し、実行のたびに内容を見て判断する",
+				summary: "Move it from allow to ask, and review each run",
 				patches: moveToAsk(rule),
 			},
 		};
@@ -278,12 +276,11 @@ function assessBash(
 			setting,
 			risk: "medium",
 			riskReason:
-				"任意のパッケージを追加でき、悪意あるパッケージのインストール時スクリプトが動くおそれがある",
+				"Can add any package, and a malicious package's install script may run",
 			convenience: "medium",
-			convenienceReason: "依存を足す場面で確認が減る",
+			convenienceReason: "Fewer confirmations when adding dependencies",
 			suggestion: {
-				summary:
-					"許可（allow）から確認（ask）に移し、追加するパッケージ名を見て判断する",
+				summary: "Move it from allow to ask, and check each package name",
 				patches: moveToAsk(rule),
 			},
 		};
@@ -293,12 +290,12 @@ function assessBash(
 			ruleId: "claude/bash-any-subcommand",
 			setting,
 			risk: "high",
-			riskReason: `${head} のすべてのサブコマンドを含むため、公開・削除・強制上書きのような操作まで確認なしで実行できる`,
+			riskReason: `${head} covers every subcommand, so publishing, deleting and force-overwriting run without confirmation`,
 			convenience: "high",
-			convenienceReason: `${head} を使うたびの確認がなくなる`,
+			convenienceReason: `${head} never asks for confirmation`,
 			suggestion: {
 				summary:
-					"このプロジェクトで使うサブコマンドだけを許可し、外に影響するもの（push・publish）は確認（ask）に置く",
+					"Allow only the subcommands this project uses, and put outward-facing ones (push, publish) under ask",
 				patches: replaceWithCandidates,
 			},
 		};
@@ -312,9 +309,10 @@ function assessBash(
 			setting,
 			risk: "low",
 			riskReason:
-				"読み取りか、リポジトリに書かれたスクリプト・ビルド・テストに限られる",
+				"Limited to reading, or to scripts, builds and tests defined in the repository",
 			convenience: "high",
-			convenienceReason: "日々の作業で何度も使い、毎回の確認がなくなる",
+			convenienceReason:
+				"Used many times a day, and saves a confirmation every time",
 		};
 	}
 	return undefined;
@@ -325,20 +323,20 @@ function trimGlob(path: string): string {
 }
 
 /**
- * Read・Edit のルールのパスがホーム全体を指すか。
- * ルールでは `~/` がホーム、`//` がファイルシステムのルートから。`/path` は設定ファイルの場所からの相対パスなので含めない
+ * Whether a Read/Edit rule path covers your whole home directory.
+ * In rules, `~/` is home and `//` starts at the filesystem root. `/path` is relative to the settings file, so it is not included
  */
 function isRuleHomePath(path: string): boolean {
 	const p = trimGlob(path);
 	return p === "~" || p === `/${homedir()}`;
 }
 
-/** Read・Edit のルールのパスがファイルシステム全体を指すか（`//`・`//*`・`//**`） */
+/** Whether a Read/Edit rule path covers the whole filesystem (`//`, `//*`, `//**`) */
 function isRuleRootPath(path: string): boolean {
 	return /^\/\/(\*\*?)?$/.test(path);
 }
 
-/** サンドボックスと追加の作業ディレクトリのパスがホームかルートを指すか。こちらは `/` がルート、`~` がホーム */
+/** Whether a sandbox or additional-directory path is home or the root. Here `/` is the root and `~` is home */
 function isPlainHomeOrRoot(path: string): boolean {
 	const p = trimGlob(path);
 	return path === "/" || p === "~" || p === homedir();
@@ -365,11 +363,11 @@ function assessPathRule(rule: string): Assessment | undefined {
 			setting,
 			risk: "high",
 			riskReason:
-				"作業ディレクトリの外（シェルの設定・SSH の鍵・ほかのリポジトリ）まで確認なしで書き換えられる",
+				"Can rewrite files outside the working directory (shell configs, SSH keys, other repositories) without confirmation",
 			convenience: "high",
-			convenienceReason: "編集のたびに確認で止まらずに済む",
+			convenienceReason: "Never stops to confirm an edit",
 			suggestion: {
-				summary: "書き込みを作業ディレクトリの中に限る",
+				summary: "Limit writes to the working directory",
 				patches: [
 					remove,
 					{ op: "add-to-array", path: ALLOW, values: ["Edit(./**)"] },
@@ -383,23 +381,23 @@ function assessPathRule(rule: string): Assessment | undefined {
 			setting,
 			risk: "medium",
 			riskReason:
-				"作業ディレクトリの外も確認なしで読めるため、SSH の鍵やクラウドの認証情報まで読み込める",
+				"Reads outside the working directory without confirmation, including SSH keys and cloud credentials",
 			convenience: "low",
 			convenienceReason:
-				"作業ディレクトリの中の読み取りは、この許可がなくても確認なしで行える",
+				"Reads inside the working directory need no confirmation even without this rule",
 			suggestion: {
 				summary:
-					"許可から外す。外のファイルを読ませたいときはディレクトリを個別に許可する",
+					"Remove it from allow. To let it read outside files, allow specific directories",
 				patches: [remove],
 			},
 		};
 	}
-	// Write(パス) のルールはどのファイルにも当たらない。別に「足すとよい設定」で消すよう勧める
+	// Write(path) rules match no file. A separate recommendation suggests removing them
 	if (arg === undefined || tool === "Write") return undefined;
 	const wide = isRuleHomePath(arg)
-		? "ホーム全体"
+		? "your whole home directory"
 		: isRuleRootPath(arg)
-			? "ファイルシステム全体"
+			? "the whole filesystem"
 			: undefined;
 	if (!wide) return undefined;
 	if (tool === "Read") {
@@ -407,13 +405,13 @@ function assessPathRule(rule: string): Assessment | undefined {
 			ruleId: "claude/read-home",
 			setting,
 			risk: "medium",
-			riskReason: `${wide}を読めるため、SSH の鍵やクラウドの認証情報まで読み込める`,
+			riskReason: `Can read ${wide}, including SSH keys and cloud credentials`,
 			convenience: "low",
 			convenienceReason:
-				"作業に要るのは作業ディレクトリの中がほとんどで、外を読むのは都度の確認で足りる",
+				"Work mostly needs the working directory, and confirming outside reads is enough",
 			suggestion: {
 				summary:
-					"許可から外す。外のファイルを読ませたいときはディレクトリを個別に許可する",
+					"Remove it from allow. To let it read outside files, allow specific directories",
 				patches: [remove],
 			},
 		};
@@ -422,11 +420,11 @@ function assessPathRule(rule: string): Assessment | undefined {
 		ruleId: "claude/edit-home",
 		setting,
 		risk: "high",
-		riskReason: `${wide}への書き込みを許すため、シェルの設定や SSH の鍵を書き換えて、次の起動時にコードを動かせる`,
+		riskReason: `Allows writes to ${wide}, so it can rewrite shell configs or SSH keys and run code on the next launch`,
 		convenience: "low",
 		convenienceReason:
-			"作業に要る書き込みは作業ディレクトリの中がほとんどで、外への書き込みは都度の確認で足りる",
-		suggestion: { summary: "許可から外す", patches: [remove] },
+			"Work mostly writes inside the working directory, and confirming outside writes is enough",
+		suggestion: { summary: "Remove it from allow", patches: [remove] },
 	};
 }
 
@@ -437,11 +435,11 @@ function assessWebFetch(rule: string): Assessment | undefined {
 		setting: `permissions.allow: "${rule}"`,
 		risk: "medium",
 		riskReason:
-			"どのサイトでも確認なしで読み込む。読み込んだページに書かれた指示を取り込み、URL に載せて情報を送るおそれがある",
+			"Fetches any site without confirmation. It may pick up instructions from a page and send data out in a URL",
 		convenience: "high",
-		convenienceReason: "調べもののたびに確認で止まらずに済む",
+		convenienceReason: "Never stops to confirm a lookup",
 		suggestion: {
-			summary: "よく読むサイトだけを WebFetch(domain:…) の形で許可する",
+			summary: "Allow only the sites you read often, as WebFetch(domain:…)",
 			patches: [{ op: "remove-from-array", path: ALLOW, values: [rule] }],
 		},
 	};
@@ -474,13 +472,12 @@ export function checkClaudeSettings(
 			ruleId: "claude/bypass-permissions",
 			setting: 'permissions.defaultMode: "bypassPermissions"',
 			risk: "high",
-			riskReason:
-				"すべての操作を確認なしで実行する。すべてのプロジェクトに効く",
+			riskReason: "Runs every action without confirmation, in every project",
 			convenience: "high",
-			convenienceReason: "確認で作業が止まらない",
+			convenienceReason: "Work never stops for confirmation",
 			suggestion: {
 				summary:
-					"編集だけを確認なしにする acceptEdits にする。コマンドも確認なしにしたいなら、サンドボックスを有効にして autoAllowBashIfSandboxed を使う",
+					"Use acceptEdits, which skips confirmation for edits only. To skip it for commands too, enable the sandbox and use autoAllowBashIfSandboxed",
 				patches: [
 					{
 						op: "set",
@@ -501,12 +498,12 @@ export function checkClaudeSettings(
 			setting: `permissions.additionalDirectories: "${dir}"`,
 			risk: "high",
 			riskReason:
-				"ホームかルートを作業ディレクトリに加えるため、その下のすべてを作業ディレクトリと同じ扱いで読み書きできる",
+				"Adds your home or the root as a working directory, so everything under it is read and written like the working directory",
 			convenience: "low",
 			convenienceReason:
-				"必要なのは特定のディレクトリで、それだけを加えれば足りる",
+				"Only specific directories are needed, and adding just those is enough",
 			suggestion: {
-				summary: "外して、必要なディレクトリだけを加える",
+				summary: "Remove it and add only the directories you need",
 				patches: [
 					{
 						op: "remove-from-array",
@@ -524,13 +521,12 @@ export function checkClaudeSettings(
 			ruleId: "claude/sandbox-network-all",
 			setting: 'sandbox.network.allowedDomains: "*"',
 			risk: "high",
-			riskReason:
-				"サンドボックスの中のコマンドが、どこへでも通信してデータを送れる",
+			riskReason: "Commands in the sandbox can reach any host and send data",
 			convenience: "high",
-			convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
+			convenienceReason: "Never stops on package downloads or API calls",
 			suggestion: {
 				summary:
-					"このプロジェクトが使うパッケージレジストリと Git のホストだけを許可する",
+					"Allow only the package registries and Git hosts this project uses",
 				patches: [
 					{ op: "remove-from-array", path: domainsPath, values: ["*"] },
 					{
@@ -551,11 +547,11 @@ export function checkClaudeSettings(
 			setting: `sandbox.filesystem.allowWrite: "${path}"`,
 			risk: "high",
 			riskReason:
-				"サンドボックスの中のコマンドが、ホームかルートの下のどこにでも書き込める",
+				"Commands in the sandbox can write anywhere under your home or the root",
 			convenience: "medium",
-			convenienceReason: "ツールのキャッシュや設定の書き込みで止まらない",
+			convenienceReason: "Tools never stop on writes to caches or config",
 			suggestion: {
-				summary: "このプロジェクトのツールが使うキャッシュの場所だけを許可する",
+				summary: "Allow only the cache directories this project's tools use",
 				patches: [
 					{ op: "remove-from-array", path: writePath, values: [path] },
 					{
@@ -576,9 +572,8 @@ export function checkClaudeSettings(
 			ruleId: "claude/enable-sandbox",
 			agent: "claude-code",
 			file: ctx.file,
-			summary:
-				"サンドボックスを有効にし、サンドボックスの中の Bash は確認なしで実行する",
-			reason: `コマンドを確認なしで動かす利便性を保ったまま、書き込み先とネットワークを OS の仕組みで制限できる`,
+			summary: "Enable the sandbox and run sandboxed Bash without confirmation",
+			reason: `Keeps the convenience of running commands without confirmation, while the OS restricts where they write and what they reach`,
 			patches: [
 				{ op: "set", path: ["sandbox", "enabled"], value: true },
 				{
@@ -595,7 +590,7 @@ export function checkClaudeSettings(
 		});
 	}
 
-	// Write(パス) は効かない。`*` だけは括弧なしの Write と同じく、すべてに当たる
+	// Write(path) has no effect. Only `*` matches everything, like a bare Write
 	const writeRules = allow.filter(
 		(rule) => /^Write\(.+\)$/s.test(rule) && rule !== "Write(*)",
 	);
@@ -604,9 +599,9 @@ export function checkClaudeSettings(
 			ruleId: "claude/write-path-ineffective",
 			agent: "claude-code",
 			file: ctx.file,
-			summary: `効かない ${writeRules.join("・")} を消す。書き込みを許可したい場所は Edit(パス) で書く`,
+			summary: `${writeRules.join(", ")} has no effect; remove it. Write the paths you want to allow as Edit(path)`,
 			reason:
-				"Write(パス) のルールはどのファイルにも当たらないため、書いてあっても許可にならず、読む人に誤解を与える",
+				"Write(path) rules match no file, so they allow nothing and mislead readers",
 			patches: [{ op: "remove-from-array", path: ALLOW, values: writeRules }],
 		});
 	}
@@ -621,9 +616,9 @@ export function checkClaudeSettings(
 				ruleId: "claude/deny-secrets",
 				agent: "claude-code",
 				file: ctx.file,
-				summary: `秘密情報のファイル（${ctx.facts.secretFiles.join("、")}）を読ませない`,
+				summary: `Deny reads of secret files (${ctx.facts.secretFiles.join(", ")})`,
 				reason:
-					"作業で秘密情報を読む必要はほとんどなく、拒否しても利便性はほとんど落ちない",
+					"Work rarely needs to read secrets, so denying them costs almost nothing",
 				patches: [
 					{
 						op: "add-to-array",

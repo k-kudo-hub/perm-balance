@@ -1,103 +1,107 @@
 # perm-balance
 
-AI エージェント（Claude Code・Codex）に渡している権限の設定を、**リスクと利便性のバランス**で点検する CLI です。
-危うい設定を指摘し、作業が止まらない範囲で狭めた設定案を、そのまま置き換えられる形で示します。
+English | [日本語](README.ja.md)
 
-## なぜ作ったか
+A CLI that checks the permission settings you give AI agents (Claude Code and Codex) by **balancing risk and convenience**.
+It flags risky settings and prints a narrowed proposal that keeps your work flowing, ready to drop in.
+
+## Why
 
 > 最小権限の原則に従うと、最も小さい範囲から渡していくべきでしょう。
 > しかし結局のところはリスクと利便性のバランスです。リスクが小さく利便性が大きいのであれば、それは許可すべきでしょうし、リスクが大きく利便性が小さいのであればもちろん採用すべきでありません。
 
-Codex には権限プロファイル（Beta）が入り、エージェントが書き込める場所と通信できる宛先を `config.toml` に利用者が書けるようになりました（[Codex の権限プロファイル](https://developers.openai.com/codex/permissions)・[Inside the Codex sandbox](https://openai.com/index/inside-the-codex-sandbox/)）。Claude Code も `settings.json` に、確認なしで許すコマンドとサンドボックスの範囲を書きます（[Claude Code の権限](https://code.claude.com/docs/en/permissions)）。
-範囲を書くのが利用者になったため、広すぎる設定も狭すぎる設定も、利用者が見分けることになります。
+(Translation: Following the principle of least privilege, we should start by granting the smallest scope. But in the end, it is a balance between risk and convenience. If the risk is small and the convenience is large, it should be allowed; if the risk is large and the convenience is small, it should of course not be adopted.)
 
-perm-balance は、上の考え方をそのまま判定の規則にしています。
+Codex added permission profiles (beta), so you now write in `config.toml` where the agent may write and which hosts it may reach ([Codex permissions](https://developers.openai.com/codex/permissions), [Inside the Codex sandbox](https://openai.com/index/inside-the-codex-sandbox/)). Claude Code likewise takes, in `settings.json`, the commands it may run without asking and the scope of its sandbox ([Claude Code permissions](https://code.claude.com/docs/en/permissions)).
+Now that you write the scope, telling a too-broad setting from a too-narrow one is up to you.
 
-## 誰のためのツールか
+perm-balance turns the position above directly into its rules.
 
-AI エージェントを自分のリポジトリで動かし始めた、チームの開発リードや個人開発者のためのツールです。
-エージェントを動かす前に、渡している権限の広さを知り、狭める設定を自分で書き足せるようにします。権限の見直しをレビューの項目にするときにも使えます。
+## Who it is for
 
-## 判定の決め方
+Team leads and individual developers who have started running AI agents in their own repositories.
+Before the agent runs, you see how much you have handed over and can write narrower settings yourself. It also helps when you make permission review part of code review.
 
-設定の1つ1つについて、**リスク**（その設定で起こりうる被害）と**利便性**（その設定で減る確認や待ち）を、それぞれ高・中・低で評価し、組み合わせで判定します。
+## How verdicts are decided
 
-| リスク＼利便性 | 低           | 中             | 高             |
-| -------------- | ------------ | -------------- | -------------- |
-| 高             | ✖ 採用しない | ▲ 狭める       | ▲ 狭める       |
-| 中             | ✖ 採用しない | ▲ 狭める       | ▲ 狭める       |
-| 低             | ✖ 採用しない | ✔ 許可してよい | ✔ 許可してよい |
+For each setting, perm-balance rates the **risk** (the damage the setting allows) and the **convenience** (the confirmations and waiting it saves) as high, medium or low, and combines them.
 
-- **✖ 採用しない**: 利便性が小さい。外しても作業はほとんど止まらないので、最小から渡す原則に従って渡さない
-- **▲ 狭める**: リスクも利便性もある。利便性を残したまま範囲を狭める案を示す（プロジェクトで使うコマンドだけに絞る・許可から確認に移す・サンドボックスの中で許す）
-- **✔ 許可してよい**: リスクが小さく、利便性がある。外すように言わず、許可してよいと明示する
-- **＋ 足すとよい**: 利便性をほとんど損なわずにリスクを下げられる変更（秘密情報のファイルの読み取り拒否・サンドボックスの有効化・効かない設定の削除）
+| Risk \ Convenience | Low      | Medium        | High          |
+| ------------------ | -------- | ------------- | ------------- |
+| High               | ✖ Reject | ▲ Narrow      | ▲ Narrow      |
+| Medium             | ✖ Reject | ▲ Narrow      | ▲ Narrow      |
+| Low                | ✖ Reject | ✔ OK to allow | ✔ OK to allow |
 
-「最小から渡す」ため、狭めた設定案はプロジェクトのファイル構成から作ります。
-`package.json` のスクリプト・`Makefile` のターゲット・言語ごとの標準のビルドとテストのコマンドだけを許可し、ネットワークはそのプロジェクトのパッケージレジストリと Git のリモートのホストだけを許します。
+- **✖ Reject**: low convenience. Removing it barely slows work, so following least privilege, it should not be granted
+- **▲ Narrow**: both risk and convenience. perm-balance proposes a narrower scope that keeps the convenience (only the commands the project uses, moving from allow to ask, allowing inside the sandbox)
+- **✔ OK to allow**: low risk with real convenience. Instead of telling you to remove it, perm-balance says plainly that it is fine
+- **+ Consider adding**: changes that lower risk at almost no cost to convenience (denying reads of secret files, enabling the sandbox, removing settings that have no effect)
 
-## 既存のスキャナとの違い
+To start from the least privilege, proposals are built from the project's own files.
+Only `package.json` scripts, `Makefile` targets and each language's standard build and test commands are allowed, and the network is limited to the project's package registries and its Git remote hosts.
 
-Claude Code や Codex の設定を点検するツールはすでにあります。たとえば [AgentShield](https://github.com/affaan-m/agentshield) は指摘を critical から info までの危険度で分けて点数と評価を付け、[PermitLint](https://dev.to/nekoautomata/permitlint-audit-claude-code-and-codex-permissions-locally-43em) は危うい書き方を見つけて high・critical の指摘で CI を止めます。
-どちらも、設定を**危険度**で評価します。AgentShield は `Bash(*)` を `Bash(git *)` と `Bash(npm *)` に置き換える修正も出しますが（[README の Auto-Fix Engine](https://github.com/affaan-m/agentshield)）、サブコマンドを限らない `Bash(git *)` は `git push --force` まで確認なしで通すため、perm-balance では「狭める」と判定します。
+## How it differs from existing scanners
 
-perm-balance は、危険度に加えて**その設定が何の役に立っているか**を評価します。
+Tools that check Claude Code and Codex settings already exist. [AgentShield](https://github.com/affaan-m/agentshield) grades findings from critical to info and gives a score, and [PermitLint](https://dev.to/nekoautomata/permitlint-audit-claude-code-and-codex-permissions-locally-43em) finds risky patterns and fails CI on high or critical findings.
+Both rate settings by **severity**. AgentShield's fix replaces `Bash(*)` with `Bash(git *)` and `Bash(npm *)` ([Auto-Fix Engine in its README](https://github.com/affaan-m/agentshield)), but `Bash(git *)` still lets `git push --force` through without confirmation, so perm-balance rates it "Narrow".
 
-- **利便性を残して狭める**: 危うい設定を外せと言うだけだと、作業が確認で止まり、結局また広い許可に戻されます。perm-balance は、そのプロジェクトで実際に使うコマンド・宛先・書き込み先を読み取り、利便性を残したまま狭めた設定案を示します
-- **許可してよいものを明示する**: リスクが小さく利便性が大きい設定（リポジトリのテストを動かすコマンドの許可）は、指摘ではなく「許可してよい」と示します。権限を狭めるだけでなく、安心して渡せる範囲を知るためのツールです
-- **置き換えられる設定案を出す**: 指摘ごとの説明に加えて、すべての案を反映した設定のうち変わる部分を表示します。`--full-proposal` を付けると、そのまま置き換えられる設定ファイルの全文を表示します
+perm-balance rates, in addition to severity, **what the setting is doing for you**.
 
-## 使い方
+- **Narrow while keeping convenience**: telling people to just remove a risky setting makes the agent stop for confirmation, and they end up granting the broad permission again. perm-balance reads the commands, hosts and write paths the project actually uses, and proposes a narrower setting that keeps the convenience
+- **Say what is fine to allow**: low-risk, useful settings (such as allowing the repository's test command) are shown as "OK to allow", not as findings. It tells you what you can safely hand over, not only what to take away
+- **Print a drop-in proposal**: besides advice per finding, it prints the parts of the settings that change with every proposal applied. With `--full-proposal` it prints the whole file, ready to replace
 
-Node.js 20 以上が必要です。
+## Usage
+
+Requires Node.js 20 or later.
 
 ```bash
-# GitHub から直接実行する
+# Run straight from GitHub
 npx github:k-kudo-hub/perm-balance
 
-# 手元に置いて実行する
+# Or clone and build
 git clone https://github.com/k-kudo-hub/perm-balance.git
 cd perm-balance && npm install && npm run build
 node dist/cli.js /path/to/your/project
 ```
 
 ```text
-perm-balance [ディレクトリ] [オプション]
+perm-balance [directory] [options]
 
-  --user            ユーザー全体の設定（~/.claude/settings.json・~/.codex/config.toml）も点検する
-  --file <パス>     このファイルも点検する（.toml は Codex、それ以外は Claude Code として読む）。何度でも指定できる
-  --json            結果を JSON で出す
-  --no-proposal     狭めた設定案を表示しない
-  --full-proposal   狭めた設定案を、変わる部分だけでなくファイル全体で表示する
-  -h, --help        使い方を表示する
+  --user            Also check user-wide settings (~/.claude/settings.json, ~/.codex/config.toml)
+  --file <path>     Also check this file (.toml is read as Codex, anything else as Claude Code). Repeatable
+  --json            Print the result as JSON
+  --no-proposal     Do not print the narrowed proposal
+  --full-proposal   Print the whole proposed file, not just the parts that change
+  -h, --help        Show help
 ```
 
-ディレクトリを省くと、いまのディレクトリの `.claude/settings.json`・`.claude/settings.local.json`・`.codex/config.toml` を点検します。
+Without a directory, it checks `.claude/settings.json`, `.claude/settings.local.json` and `.codex/config.toml` in the current directory.
 
-終了コードは、採用しない・狭めるの指摘がなければ `0`、あれば `1`、オプションの誤りや読めない設定ファイルがあれば `2` です。CI で権限の見直しを必須にするときに使えます。
+The exit code is `0` with no reject or narrow findings, `1` with at least one, and `2` for invalid options or an unreadable settings file. Use it in CI to make permission review mandatory.
 
-### 出力の例
+### Example output
 
 ```text
-━━ .claude/settings.json（Claude Code・プロジェクトの設定）
+━━ .claude/settings.json (Claude Code, project settings)
 
-✖ 採用しない  permissions.allow: "Edit(~/**)"
-    リスク 高    ホーム全体への書き込みを許すため、シェルの設定や SSH の鍵を書き換えて、次の起動時にコードを動かせる
-    利便性 低    作業に要る書き込みは作業ディレクトリの中がほとんどで、外への書き込みは都度の確認で足りる
-    → 許可から外す
+✖ Reject  permissions.allow: "Edit(~/**)"
+    Risk high          Allows writes to your whole home directory, so it can rewrite shell configs or SSH keys and run code on the next launch
+    Convenience low    Work mostly writes inside the working directory, and confirming outside writes is enough
+    → Remove it from allow
 
-▲ 狭める  permissions.allow: "Bash(*)"
-    リスク 高    削除・送信・権限の変更を含む、どんなコマンドでも確認なしで実行できる
-    利便性 高    コマンドのたびに確認で止まらずに済む
-    → このプロジェクトで使うコマンド（スクリプト・ビルド・テスト・Git の読み取り）だけを許可する。確認なしで動かしたいなら、サンドボックスを有効にする（下の「足すとよい設定」）
+▲ Narrow  permissions.allow: "Bash(*)"
+    Risk high          Any command runs without confirmation, including deleting files, sending data and changing permissions
+    Convenience high   Never stops to confirm a command
+    → Allow only the commands this project uses (scripts, builds, tests, read-only Git). To run commands without confirmation, enable the sandbox (see 'Consider adding' below)
 
-＋ 足すとよい  秘密情報のファイル（.env）を読ませない
-    理由: 作業で秘密情報を読む必要はほとんどなく、拒否しても利便性はほとんど落ちない
++ Consider adding  Deny reads of secret files (.env)
+    Why: Work rarely needs to read secrets, so denying them costs almost nothing
 
-✔ 許可してよい（リスクが小さく、利便性が大きい）
+✔ OK to allow (low risk, real convenience)
     permissions.allow: "Bash(npm run test *)"
 
-狭めた設定案（変わる部分だけ。ほかの設定はそのまま。ファイル全体は --full-proposal で表示）:
+Narrowed proposal (only what changes; everything else stays. Use --full-proposal for the whole file):
 
     {
       "permissions": {
@@ -108,52 +112,52 @@ perm-balance [ディレクトリ] [オプション]
     }
 ```
 
-## 点検する設定
+## What it checks
 
-### Claude Code（`settings.json`）
+### Claude Code (`settings.json`)
 
-| 設定                                                                      | 判定                                                                     |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `Bash` / `Bash(*)`（すべてのコマンド）                                    | 狭める。プロジェクトのコマンドだけを許可する                             |
-| `rm`・`sudo`・`chmod` を引数を問わず許可（`Bash(rm *)`）                  | 採用しない                                                               |
-| `curl`・`wget`・`ssh` を引数を問わず許可                                  | 狭める。WebFetch の宛先指定かサンドボックスの宛先指定に替える            |
-| `python`・`node`・`npx`・`sh` を引数を問わず許可                          | 狭める。プロジェクトのコマンドだけを許可する                             |
-| `git *` のようにサブコマンドを限らない許可                                | 狭める                                                                   |
-| `git push`・`npm publish`・`kubectl apply` の許可（引数を固定していても） | 狭める。許可（allow）から確認（ask）に移す                               |
-| `npm install`・`pip install` を引数を問わず許可                           | 狭める。確認（ask）に移す                                                |
-| 括弧なしの `Edit` / `Write`・`Write(*)`（場所を限らない）                 | 狭める。`Edit(./**)` にする                                              |
-| ホーム全体・ルート全体への `Edit`（`Edit(~/**)`・`Edit(//**)`）           | 採用しない                                                               |
-| 括弧なしの `Read`・ホーム全体・ルート全体の `Read`                        | 採用しない（作業ディレクトリの中は、もともと確認なしで読める）           |
-| `Write(パス)`（どのファイルにも当たらず効かない）                         | 足すとよい（消して、`Edit(パス)` で書く）                                |
-| `WebFetch` / `WebFetch(domain:*)`                                         | 狭める。よく読むサイトだけを許可する                                     |
-| ユーザー設定の `defaultMode: "bypassPermissions"`                         | 狭める。`acceptEdits` にする                                             |
-| ホーム・ルートを `additionalDirectories` に追加                           | 採用しない                                                               |
-| `sandbox.network.allowedDomains` の `"*"`                                 | 狭める。プロジェクトが使うドメインだけにする                             |
-| `sandbox.filesystem.allowWrite` のホーム・ルート                          | 狭める。ツールのキャッシュの場所だけにする                               |
-| `git status`・`npm run test` のような読み取り・プロジェクトのコマンド     | 許可してよい                                                             |
-| 広い Bash の許可があるのにサンドボックスが無効                            | 足すとよい（サンドボックスの有効化）                                     |
-| 秘密情報のファイルがあるのに読み取りを拒否していない                      | 足すとよい（`Read(**/.env)` の拒否。見本の `.env.example` は読めるまま） |
+| Setting                                                                | Verdict                                                                           |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `Bash` / `Bash(*)` (every command)                                     | Narrow: allow only the project's commands                                         |
+| `rm`, `sudo`, `chmod` with any arguments (`Bash(rm *)`)                | Reject                                                                            |
+| `curl`, `wget`, `ssh` with any arguments                               | Narrow: use WebFetch domains or sandbox domains instead                           |
+| `python`, `node`, `npx`, `sh` with any arguments                       | Narrow: allow only the project's commands                                         |
+| Any subcommand, such as `git *`                                        | Narrow                                                                            |
+| `git push`, `npm publish`, `kubectl apply` (even with fixed arguments) | Narrow: move from allow to ask                                                    |
+| `npm install`, `pip install` with any arguments                        | Narrow: move to ask                                                               |
+| Bare `Edit` / `Write`, `Write(*)` (anywhere)                           | Narrow: use `Edit(./**)`                                                          |
+| `Edit` on your whole home or the root (`Edit(~/**)`, `Edit(//**)`)     | Reject                                                                            |
+| Bare `Read`, or `Read` on your whole home or the root                  | Reject (reads inside the working directory need no confirmation anyway)           |
+| `Write(path)` (matches no file, so it has no effect)                   | Consider adding: remove it and write `Edit(path)`                                 |
+| `WebFetch` / `WebFetch(domain:*)`                                      | Narrow: allow only the sites you read often                                       |
+| `defaultMode: "bypassPermissions"` in user settings                    | Narrow: use `acceptEdits`                                                         |
+| Home or root in `additionalDirectories`                                | Reject                                                                            |
+| `"*"` in `sandbox.network.allowedDomains`                              | Narrow: only the domains the project uses                                         |
+| Home or root in `sandbox.filesystem.allowWrite`                        | Narrow: only the tools' cache directories                                         |
+| Read-only or project commands such as `git status`, `npm run test`     | OK to allow                                                                       |
+| Broad Bash allows with the sandbox off                                 | Consider adding: enable the sandbox                                               |
+| Secret files present but reads not denied                              | Consider adding: deny `Read(**/.env)` (samples like `.env.example` stay readable) |
 
-### Codex（`config.toml`）
+### Codex (`config.toml`)
 
-| 設定                                                                                     | 判定                                                                                                   |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `sandbox_mode = "danger-full-access"` / `default_permissions = ":danger-full-access"`    | 狭める。`:workspace` を土台に宛先を絞ったプロファイルにする                                            |
-| ネットワークの全許可（`network_proxy` が無効なままの `enabled = true`・`"*" = "allow"`） | 狭める。プロジェクトが使う宛先だけを許可し、プロキシで強制する。宛先の候補がなければネットワークを切る |
-| 旧来の `[sandbox_workspace_write] network_access = true`                                 | 狭める。宛先を絞ったプロファイルに移す                                                                 |
-| ホーム全体・ルート全体（`"~"`・`":root"`）への `"write"`                                 | 狭める。ツールのキャッシュの場所だけにする                                                             |
-| 旧来の `writable_roots` のホーム・ルート                                                 | 狭める                                                                                                 |
-| `dangerously_allow_all_unix_sockets = true`                                              | 採用しない                                                                                             |
-| `default_permissions` と `sandbox_mode` の併記（`sandbox_mode` だけが効く）              | 採用しない。書き込みの範囲と通信を比べて広いほうを消し、狭いほうを効かせる                             |
-| 秘密情報のファイルがあるのに読み取りを拒否していない                                     | 足すとよい（`"**/.env" = "deny"`）                                                                     |
+| Setting                                                                               | Verdict                                                                                                 |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `sandbox_mode = "danger-full-access"` / `default_permissions = ":danger-full-access"` | Narrow: a profile based on `:workspace` with restricted domains                                         |
+| Full network access (`enabled = true` with `network_proxy` off, or `"*" = "allow"`)   | Narrow: allow only the project's domains, enforced by the proxy; turn the network off if there are none |
+| Legacy `[sandbox_workspace_write] network_access = true`                              | Narrow: move to a profile with restricted domains                                                       |
+| `"write"` on your whole home or the root (`"~"`, `":root"`)                           | Narrow: only the tools' cache directories                                                               |
+| Home or root in legacy `writable_roots`                                               | Narrow                                                                                                  |
+| `dangerously_allow_all_unix_sockets = true`                                           | Reject                                                                                                  |
+| Both `default_permissions` and `sandbox_mode` (only `sandbox_mode` applies)           | Reject: compare write scope and network access, remove the broader one so the narrower one applies      |
+| Secret files present but reads not denied                                             | Consider adding: `"**/.env" = "deny"`                                                                   |
 
-## 限界
+## Limitations
 
-- 設定ファイルの書き方を読む静的な点検です。エージェントの実際の振る舞いは確かめません
-- リスクと利便性の評価は、規則ごとに決めた固定の値で、チームの事情を知りません。たとえば本番の認証情報を扱うリポジトリでは、`WebFetch` の許可も「狭める」ではなく外すべきですが、perm-balance は「狭める」と判定します
-- Codex の設定案は TOML を読み直して書き出すため、元のファイルのコメントは引き継がれません
-- Claude Code の Bash の許可は文字列の一致で判定されるため、許可を狭めても、それだけでは安全の境界になりません（[Claude Code のドキュメント](https://code.claude.com/docs/en/permissions)）。確認なしで動かすなら、サンドボックスと組み合わせてください
+- It is a static check of how the settings are written. It does not observe what the agent actually does
+- Risk and convenience are fixed values per rule and know nothing about your team. For example, in a repository that handles production credentials, even `WebFetch` should be removed, but perm-balance rates it "Narrow"
+- Codex proposals are produced by re-serializing the TOML, so comments in the original file are not preserved
+- Claude Code matches Bash rules as text, so narrowing them alone is not a security boundary ([Claude Code docs](https://code.claude.com/docs/en/permissions)). If you run commands without confirmation, combine it with the sandbox
 
-## ライセンス
+## License
 
 MIT

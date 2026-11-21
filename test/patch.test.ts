@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyPatches } from "../src/patch.js";
 
 describe("applyPatches", () => {
-	it("元のオブジェクトを変えずに、変更を反映した複製を返す", () => {
+	it("returns a patched copy without mutating the original", () => {
 		const original = { permissions: { allow: ["Bash(*)", "Bash(ls *)"] } };
 		const result = applyPatches(original, [
 			{
@@ -22,14 +22,14 @@ describe("applyPatches", () => {
 		expect(original.permissions.allow).toEqual(["Bash(*)", "Bash(ls *)"]);
 	});
 
-	it("add-to-array は重複を足さない", () => {
+	it("add-to-array does not add duplicates", () => {
 		const result = applyPatches({ a: ["x"] }, [
 			{ op: "add-to-array", path: ["a"], values: ["x", "y"] },
 		]);
 		expect(result).toEqual({ a: ["x", "y"] });
 	});
 
-	it("set は途中のオブジェクトを作り、delete はキーを消す", () => {
+	it("set creates intermediate objects and delete removes the key", () => {
 		const result = applyPatches({ sandbox_mode: "danger-full-access" }, [
 			{ op: "delete", path: ["sandbox_mode"] },
 			{
@@ -43,7 +43,7 @@ describe("applyPatches", () => {
 		});
 	});
 
-	it("空になった配列はキーごと消す", () => {
+	it("removes the key when its array becomes empty", () => {
 		const result = applyPatches({ permissions: { allow: ["Bash(*)"] } }, [
 			{
 				op: "remove-from-array",
@@ -54,7 +54,7 @@ describe("applyPatches", () => {
 		expect(result).toEqual({ permissions: {} });
 	});
 
-	it("消す変更では、ない階層を作らない", () => {
+	it("does not create missing levels for a delete", () => {
 		const result = applyPatches({ a: 1 }, [
 			{ op: "delete", path: ["x", "y", "z"] },
 			{ op: "remove-from-array", path: ["p", "q"], values: ["v"] },

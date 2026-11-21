@@ -9,13 +9,13 @@ import type { RuleResult } from "./rules/common.js";
 import type { Agent, FileReport, Scope } from "./types.js";
 
 export interface ScanOptions {
-	/** 点検するプロジェクトのディレクトリ */
+	/** Project directory to check */
 	root: string;
-	/** ユーザーのホームディレクトリ */
+	/** The user's home directory */
 	home: string;
-	/** ユーザー全体の設定（~/.claude/settings.json・~/.codex/config.toml）も点検する */
+	/** Also check user-wide settings (~/.claude/settings.json, ~/.codex/config.toml) */
 	includeUser: boolean;
-	/** 追加で点検するファイル */
+	/** Extra files to check */
 	files: string[];
 }
 

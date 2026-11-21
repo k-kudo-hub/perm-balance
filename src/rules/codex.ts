@@ -36,7 +36,7 @@ function customProfiles(config: unknown): Record<string, unknown> {
 	return isObj(permissions) ? permissions : {};
 }
 
-/** プロファイルの広さ（0: 読むだけ・1: ワークスペースに書ける・2: 制限なし）。extends をたどって標準のプロファイルで決める */
+/** How broad a profile is (0: read-only, 1: can write the workspace, 2: unrestricted), resolved by following `extends` to a built-in profile */
 function profileRank(config: unknown, name: string): number {
 	let current: unknown = name;
 	for (let i = 0; i < 10 && typeof current === "string"; i++) {
@@ -44,11 +44,11 @@ function profileRank(config: unknown, name: string): number {
 		if (builtin !== undefined) return builtin;
 		current = get(customProfiles(config)[current], ["extends"]);
 	}
-	// extends がないプロファイルの土台は文書で決まっていないため、標準の :workspace と同じとみなす
+	// The docs do not define the base of a profile without `extends`, so treat it like the built-in :workspace
 	return 1;
 }
 
-/** プロファイルで通信できるか。extends をたどり、最初に network.enabled を書いたものか標準のプロファイルで決める */
+/** Whether a profile allows network access, resolved by following `extends` to the first profile that sets network.enabled, or to a built-in profile */
 function profileNetwork(config: unknown, name: string): boolean {
 	let current: unknown = name;
 	for (let i = 0; i < 10 && typeof current === "string"; i++) {
@@ -62,7 +62,7 @@ function profileNetwork(config: unknown, name: string): boolean {
 	return false;
 }
 
-/** 旧来の設定で通信できるか */
+/** Whether the legacy settings allow network access */
 function legacyNetwork(config: unknown, sandboxMode: string): boolean {
 	if (sandboxMode === "danger-full-access") return true;
 	return (
@@ -71,14 +71,14 @@ function legacyNetwork(config: unknown, sandboxMode: string): boolean {
 	);
 }
 
-/** 新しく作るプロファイルの名前。既存のものと重ならないようにする */
+/** Name for a new profile that does not collide with an existing one */
 function newProfileName(config: unknown): string {
 	return "project" in customProfiles(config) ? "project-narrow" : "project";
 }
 
 /**
- * 宛先をこのプロジェクトのものに絞り、プロキシで強制するための変更。
- * プロキシは許可した宛先がなければ外への通信を止めるため、宛先の候補がなければネットワークを切る
+ * Patches that restrict destinations to this project's and enforce them with the proxy.
+ * The proxy blocks external traffic when nothing is allowed, so with no candidate domains, turn the network off
  */
 function narrowNetwork(
 	profile: string,
@@ -109,7 +109,7 @@ function narrowNetwork(
 	];
 }
 
-/** サンドボックスなし・旧来の設定から、ワークスペースだけ書けて宛先を絞ったプロファイルに移す変更 */
+/** Patches that move from no sandbox or legacy settings to a profile that can write only the workspace and reach only allowed domains */
 function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 	const name = newProfileName(config);
 	const roots = stringArray(
@@ -132,7 +132,7 @@ function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 }
 
 const NETWORK_RISK =
-	"コマンドがどこへでも通信でき、読み込んだ指示に従って秘密情報を送るおそれがある";
+	"Commands can reach any host, and may send secrets out by following instructions they read";
 
 function checkProfile(
 	name: string,
@@ -153,12 +153,12 @@ function checkProfile(
 				setting: `[permissions.${name}.filesystem] "${path}" = "write"`,
 				risk: "high",
 				riskReason:
-					"ホームかルートの下のどこにでも書き込めるため、シェルの設定や SSH の鍵を書き換えて、次の起動時にコードを動かせる",
+					"Can write anywhere under your home or the root, so it can rewrite shell configs or SSH keys and run code on the next launch",
 				convenience: "medium",
-				convenienceReason: "ツールのキャッシュや設定の書き込みで止まらない",
+				convenienceReason: "Tools never stop on writes to caches or config",
 				suggestion: {
 					summary:
-						"このプロジェクトのツールが使うキャッシュの場所だけを書き込み可にする",
+						"Allow writes only to the cache directories this project's tools use",
 					patches: [
 						{ op: "delete", path: [...fsPath, path] },
 						...homeWriteCandidates(ctx.facts).map(
@@ -181,25 +181,25 @@ function checkProfile(
 		const allowAll = isObj(domains) && domains["*"] === "allow";
 		const hasAllow = isObj(domains) && Object.values(domains).includes("allow");
 		const proxy = get(config, ["features", "network_proxy"]) === true;
-		// プロキシが有効で "*" を許可していなければ、通信できるのは許可した宛先だけ（許可がなければ外へは通信できない）
+		// With the proxy on and no "*" allowed, only allowed domains are reachable (none at all if nothing is allowed)
 		if (allowAll || !proxy) {
 			const why = allowAll
-				? '"*" = "allow" ですべての宛先を許可している'
+				? '"*" = "allow" allows every destination'
 				: hasAllow
-					? "宛先を絞っているが、[features] network_proxy を有効にしていないため、宛先の指定が効かずすべての宛先に通信できる"
-					: "宛先を決めずにネットワークを有効にしており、[features] network_proxy も無効なため、すべての宛先に通信できる";
+					? "Domains are listed, but [features] network_proxy is off, so the list is not enforced and every destination is reachable"
+					: "The network is on with no domain list and [features] network_proxy is off, so every destination is reachable";
 			const keepDomains = hasAllow && !allowAll;
 			out.push({
 				ruleId: "codex/network-all",
 				setting: `[permissions.${name}.network] enabled = true`,
 				risk: "high",
-				riskReason: `${why}。${NETWORK_RISK}`,
+				riskReason: `${why}. ${NETWORK_RISK}`,
 				convenience: "high",
-				convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
+				convenienceReason: "Never stops on package downloads or API calls",
 				suggestion: {
 					summary: keepDomains
-						? "[features] network_proxy を有効にして、宛先の指定を効かせる"
-						: "このプロジェクトが使うパッケージレジストリと Git のホストだけを許可し、プロキシで強制する（宛先の候補がなければネットワークを切る）",
+						? "Turn on [features] network_proxy so the domain list is enforced"
+						: "Allow only the package registries and Git hosts this project uses, enforced by the proxy (turn the network off if there are none)",
 					patches: narrowNetwork(name, ctx, keepDomains),
 				},
 			});
@@ -211,12 +211,13 @@ function checkProfile(
 			setting: `[permissions.${name}.network] dangerously_allow_all_unix_sockets = true`,
 			risk: "high",
 			riskReason:
-				"Docker のソケットのような、つなぐだけでサンドボックスの外を操作できるソケットにも届く",
+				"Reaches sockets such as Docker's, which control things outside the sandbox just by connecting",
 			convenience: "low",
 			convenienceReason:
-				"使うソケットは限られ、[permissions.<名前>.network.unix_sockets] で個別に許可すれば足りる",
+				"Only a few sockets are needed, and [permissions.<name>.network.unix_sockets] can allow them one by one",
 			suggestion: {
-				summary: "外して、使うソケットだけを unix_sockets で許可する",
+				summary:
+					"Remove it and allow only the sockets you use with unix_sockets",
 				patches: [
 					{
 						op: "delete",
@@ -234,7 +235,7 @@ function checkProfile(
 	return out;
 }
 
-/** 旧来の sandbox_mode が効いているときの点検 */
+/** Checks for when the legacy sandbox_mode is in effect */
 function checkLegacy(
 	config: unknown,
 	ctx: RuleContext,
@@ -259,12 +260,12 @@ function checkLegacy(
 			ruleId: "codex/legacy-network-all",
 			setting: "[sandbox_workspace_write] network_access = true",
 			risk: "high",
-			riskReason: `旧来の設定では宛先を絞れない。${NETWORK_RISK}`,
+			riskReason: `The legacy settings cannot restrict destinations. ${NETWORK_RISK}`,
 			convenience: "high",
-			convenienceReason: "パッケージの取得や API の呼び出しで止まらない",
+			convenienceReason: "Never stops on package downloads or API calls",
 			suggestion: {
 				summary:
-					"権限プロファイルに移し、このプロジェクトが使う宛先だけを許可する",
+					"Move to a permission profile and allow only the destinations this project uses",
 				patches: migrateToProfile(config, ctx),
 			},
 		});
@@ -277,12 +278,12 @@ function checkLegacy(
 			setting: `[sandbox_workspace_write] writable_roots = ["${root}"]`,
 			risk: "high",
 			riskReason:
-				"ホームかルートの下のどこにでも書き込めるため、シェルの設定や SSH の鍵を書き換えられる",
+				"Can write anywhere under your home or the root, so it can rewrite shell configs or SSH keys",
 			convenience: "medium",
-			convenienceReason: "ツールのキャッシュや設定の書き込みで止まらない",
+			convenienceReason: "Tools never stop on writes to caches or config",
 			suggestion: {
 				summary:
-					"外して、このプロジェクトのツールが使うキャッシュの場所だけを加える",
+					"Remove it and add only the cache directories this project's tools use",
 				patches: [
 					{ op: "remove-from-array", path: rootsPath, values: [root] },
 					{
@@ -304,18 +305,18 @@ function fullAccess(
 ): Assessment {
 	const noApproval =
 		approval === "never"
-			? '。approval_policy = "never" と組み合わさり、実行前の確認もない'
+			? '. Combined with approval_policy = "never", nothing is confirmed before it runs'
 			: "";
 	return {
 		ruleId: "codex/danger-full-access",
 		setting,
 		risk: "high",
-		riskReason: `サンドボックスを使わず、ファイルシステム全体への書き込みとすべての宛先への通信を許す${noApproval}`,
+		riskReason: `Runs without a sandbox, allowing writes to the whole filesystem and traffic to every destination${noApproval}`,
 		convenience: "high",
-		convenienceReason: "書き込み先や通信で止まらずに作業できる",
+		convenienceReason: "Work never stops on writes or network access",
 		suggestion: {
 			summary:
-				"ワークスペースだけを書き込み可にする :workspace を土台に、このプロジェクトが使う宛先だけ通信を許すプロファイルにする",
+				"Use a profile built on :workspace (writes only to the workspace) that reaches only the destinations this project uses",
 			patches,
 		},
 	};
@@ -331,15 +332,15 @@ export function checkCodexConfig(
 	const dp =
 		typeof defaultPermissions === "string" ? defaultPermissions : undefined;
 
-	// sandbox_mode があると default_permissions は使われない。両方あるときは、広いほうを消して狭いほうを効かせる
+	// default_permissions is ignored while sandbox_mode is set. When both exist, remove the broader one so the narrower one applies
 	let legacyEffective = sandboxMode !== undefined;
 	if (dp !== undefined && typeof sandboxMode === "string") {
-		// 書き込みの範囲か通信のどちらかでプロファイルのほうが広ければ、プロファイルを消す
+		// If the profile is broader in either writes or network access, remove the profile
 		const profileWider =
 			profileRank(config, dp) > (SANDBOX_MODE_RANK[sandboxMode] ?? 1) ||
 			(profileNetwork(config, dp) && !legacyNetwork(config, sandboxMode));
 		legacyEffective = profileWider;
-		const setting = `default_permissions = "${dp}" と sandbox_mode = "${sandboxMode}"`;
+		const setting = `default_permissions = "${dp}" and sandbox_mode = "${sandboxMode}"`;
 		assessments.push(
 			profileWider
 				? {
@@ -347,11 +348,11 @@ export function checkCodexConfig(
 						setting,
 						risk: "medium",
 						riskReason:
-							"効いているのは sandbox_mode で、使われていない default_permissions のほうが広い。sandbox_mode を消すと権限が広がる",
+							"sandbox_mode is what applies, and the unused default_permissions is broader. Removing sandbox_mode would widen permissions",
 						convenience: "low",
-						convenienceReason: "使われていない設定を残しても得られるものはない",
+						convenienceReason: "Keeping an unused setting gains nothing",
 						suggestion: {
-							summary: "使われていない default_permissions を消す",
+							summary: "Remove the unused default_permissions",
 							patches: [{ op: "delete", path: ["default_permissions"] }],
 						},
 					}
@@ -360,12 +361,12 @@ export function checkCodexConfig(
 						setting,
 						risk: "medium",
 						riskReason:
-							"sandbox_mode があると default_permissions のプロファイルは使われないため、書いたプロファイルの制限が効いていない",
+							"The default_permissions profile is ignored while sandbox_mode is set, so the restrictions you wrote are not in effect",
 						convenience: "low",
-						convenienceReason: "両方を書いても得られるものはない",
+						convenienceReason: "Writing both gains nothing",
 						suggestion: {
 							summary:
-								"旧来の sandbox_mode と [sandbox_workspace_write] を消し、プロファイルを効かせる",
+								"Remove the legacy sandbox_mode and [sandbox_workspace_write] so the profile applies",
 							patches: [
 								{ op: "delete", path: ["sandbox_mode"] },
 								{ op: "delete", path: ["sandbox_workspace_write"] },
@@ -421,9 +422,9 @@ export function checkCodexConfig(
 				ruleId: "codex/deny-secrets",
 				agent: "codex",
 				file: ctx.file,
-				summary: `秘密情報のファイル（${ctx.facts.secretFiles.join("、")}）を読ませない`,
+				summary: `Deny reads of secret files (${ctx.facts.secretFiles.join(", ")})`,
 				reason:
-					"作業で秘密情報を読む必要はほとんどなく、拒否しても利便性はほとんど落ちない",
+					"Work rarely needs to read secrets, so denying them costs almost nothing",
 				patches: [
 					...create,
 					...missing.map(

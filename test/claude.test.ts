@@ -31,8 +31,8 @@ function verdictOf(
 		?.verdict;
 }
 
-describe("Bash の許可", () => {
-	it("すべてのコマンドの許可は、プロジェクトのコマンドに狭める", () => {
+describe("Bash allow rules", () => {
+	it("narrows allow-all commands to the project's commands", () => {
 		const { findings } = check({ permissions: { allow: ["Bash(*)"] } });
 		const f = findings.find((x) => x.ruleId === "claude/bash-all");
 		expect(f?.verdict).toBe("narrow");
@@ -49,7 +49,7 @@ describe("Bash の許可", () => {
 		});
 	});
 
-	it("引数なしの Bash も、末尾が :* の書き方も同じに扱う", () => {
+	it("treats bare Bash and a trailing :* the same", () => {
 		expect(verdictOf({ permissions: { allow: ["Bash"] } }, '"Bash"')).toBe(
 			"narrow",
 		);
@@ -58,7 +58,7 @@ describe("Bash の許可", () => {
 		);
 	});
 
-	it("消す・権限を上げるコマンドの許可は採用しない", () => {
+	it("rejects allowing destructive or privilege-escalating commands", () => {
 		expect(verdictOf({ permissions: { allow: ["Bash(rm *)"] } }, "rm *")).toBe(
 			"reject",
 		);
@@ -67,7 +67,7 @@ describe("Bash の許可", () => {
 		).toBe("reject");
 	});
 
-	it("任意のコードを動かせるコマンドの許可は狭める", () => {
+	it("narrows commands that can run arbitrary code", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["Bash(python3 *)"] } }, "python3 *"),
 		).toBe("narrow");
@@ -76,13 +76,13 @@ describe("Bash の許可", () => {
 		).toBe("narrow");
 	});
 
-	it("サブコマンドを限らないツールの許可は狭める", () => {
+	it("narrows tools allowed without restricting subcommands", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["Bash(git *)"] } }, "git *"),
 		).toBe("narrow");
 	});
 
-	it("外に影響する操作は、許可から確認（ask）に移す", () => {
+	it("moves operations with external effects from allow to ask", () => {
 		const { findings } = check({
 			permissions: { allow: ["Bash(git push *)"] },
 		});
@@ -101,7 +101,7 @@ describe("Bash の許可", () => {
 		]);
 	});
 
-	it("リスクが小さく利便性が大きいコマンドは許可してよい", () => {
+	it("allows low-risk, high-convenience commands", () => {
 		expect(
 			verdictOf(
 				{ permissions: { allow: ["Bash(npm run test *)"] } },
@@ -116,15 +116,15 @@ describe("Bash の許可", () => {
 		).toBe("keep");
 	});
 
-	it("引数を固定したコマンドは指摘しない", () => {
+	it("does not flag commands with fixed arguments", () => {
 		expect(
 			check({ permissions: { allow: ["Bash(rm -rf dist)"] } }).findings,
 		).toEqual([]);
 	});
 });
 
-describe("ファイルとネットワークの許可", () => {
-	it("ホーム全体への書き込み許可は採用しない", () => {
+describe("file and network allow rules", () => {
+	it("rejects write access to the whole home directory", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["Edit(~/**)"] } }, "Edit(~/**)"),
 		).toBe("reject");
@@ -133,7 +133,7 @@ describe("ファイルとネットワークの許可", () => {
 		).toBe("reject");
 	});
 
-	it("場所を限らない Edit の許可は、作業ディレクトリに狭める", () => {
+	it("narrows unrestricted Edit to the working directory", () => {
 		const { findings } = check({ permissions: { allow: ["Edit"] } });
 		expect(findings[0]?.verdict).toBe("narrow");
 		expect(findings[0]?.suggestion?.patches).toContainEqual({
@@ -143,19 +143,19 @@ describe("ファイルとネットワークの許可", () => {
 		});
 	});
 
-	it("場所を限らない Read の許可は採用しない（作業ディレクトリの中はもともと確認なしで読める）", () => {
+	it("rejects unrestricted Read (the working directory is already readable without prompts)", () => {
 		const { findings } = check({ permissions: { allow: ["Read"] } });
 		expect(findings[0]?.ruleId).toBe("claude/read-anywhere");
 		expect(findings[0]?.verdict).toBe("reject");
 	});
 
-	it("ホーム全体の読み取り許可は採用しない", () => {
+	it("rejects read access to the whole home directory", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["Read(~/**)"] } }, "Read(~/**)"),
 		).toBe("reject");
 	});
 
-	it("すべてのドメインへの WebFetch の許可は狭める", () => {
+	it("narrows WebFetch allowed for all domains", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["WebFetch"] } }, "WebFetch"),
 		).toBe("narrow");
@@ -168,7 +168,7 @@ describe("ファイルとネットワークの許可", () => {
 		).toEqual([]);
 	});
 
-	it("サンドボックスのネットワーク全許可は、プロジェクトで使うドメインに狭める", () => {
+	it("narrows sandbox allow-all network access to the project's domains", () => {
 		const { findings } = check({
 			sandbox: { enabled: true, network: { allowedDomains: ["*"] } },
 		});
@@ -181,7 +181,7 @@ describe("ファイルとネットワークの許可", () => {
 		});
 	});
 
-	it("サンドボックスのホーム全体への書き込み許可は、キャッシュの場所に狭める", () => {
+	it("narrows sandbox write access to the whole home directory to cache locations", () => {
 		const { findings } = check({
 			sandbox: { enabled: true, filesystem: { allowWrite: ["~"] } },
 		});
@@ -194,15 +194,15 @@ describe("ファイルとネットワークの許可", () => {
 		});
 	});
 
-	it("ホームやルートを追加の作業ディレクトリにするのは採用しない", () => {
+	it("rejects home or root as an additional working directory", () => {
 		expect(
 			verdictOf({ permissions: { additionalDirectories: ["~/"] } }, "~/"),
 		).toBe("reject");
 	});
 });
 
-describe("モード", () => {
-	it("ユーザー設定の bypassPermissions は acceptEdits に狭める", () => {
+describe("mode", () => {
+	it("narrows bypassPermissions in user settings to acceptEdits", () => {
 		const { findings } = check(
 			{ permissions: { defaultMode: "bypassPermissions" } },
 			"user",
@@ -213,15 +213,15 @@ describe("モード", () => {
 		]);
 	});
 
-	it("プロジェクト設定の bypassPermissions は効かないので指摘しない", () => {
+	it("does not flag bypassPermissions in project settings because it has no effect", () => {
 		expect(
 			check({ permissions: { defaultMode: "bypassPermissions" } }).findings,
 		).toEqual([]);
 	});
 });
 
-describe("足すとよい設定", () => {
-	it("広い Bash の許可があってサンドボックスが無効なら、サンドボックスを勧める", () => {
+describe("recommended additions", () => {
+	it("recommends the sandbox when broad Bash access is allowed and the sandbox is disabled", () => {
 		const { recommendations } = check({ permissions: { allow: ["Bash(*)"] } });
 		const r = recommendations.find((x) => x.ruleId === "claude/enable-sandbox");
 		expect(r?.patches).toContainEqual({
@@ -231,7 +231,7 @@ describe("足すとよい設定", () => {
 		});
 	});
 
-	it("サンドボックスが有効なら勧めない", () => {
+	it("does not recommend it when the sandbox is enabled", () => {
 		const { recommendations } = check({
 			permissions: { allow: ["Bash(*)"] },
 			sandbox: { enabled: true },
@@ -241,7 +241,7 @@ describe("足すとよい設定", () => {
 		).toBeUndefined();
 	});
 
-	it("秘密情報のファイルがあって拒否の設定がなければ、拒否を勧める", () => {
+	it("recommends deny rules when secret files exist and are not denied", () => {
 		const { recommendations } = check({ permissions: { allow: [] } });
 		expect(
 			recommendations.find((x) => x.ruleId === "claude/deny-secrets")?.patches,
@@ -254,7 +254,7 @@ describe("足すとよい設定", () => {
 		]);
 	});
 
-	it("すでに拒否していれば勧めない", () => {
+	it("does not recommend when already denied", () => {
 		const { recommendations } = check({
 			permissions: { deny: ["Read(**/.env)"] },
 		});
@@ -264,8 +264,8 @@ describe("足すとよい設定", () => {
 	});
 });
 
-describe("パスの書き方", () => {
-	it("/ で始まるパスは設定ファイルの場所からの相対パスなので、ルートやホームとみなさない", () => {
+describe("path syntax", () => {
+	it("does not treat paths starting with / as root or home, since they are relative to the settings file", () => {
 		expect(check({ permissions: { allow: ["Edit(/**)"] } }).findings).toEqual(
 			[],
 		);
@@ -274,7 +274,7 @@ describe("パスの書き方", () => {
 		).toEqual([]);
 	});
 
-	it("// で始まるパスはルートからなので、ホームを指していれば採用しない", () => {
+	it("rejects paths starting with // that point to home, since they are absolute", () => {
 		expect(
 			verdictOf(
 				{ permissions: { allow: [`Edit(/${homedir()}/**)`] } },
@@ -283,13 +283,13 @@ describe("パスの書き方", () => {
 		).toBe("reject");
 	});
 
-	it("括弧付きの Edit(**) は作業ディレクトリの中なので指摘しない", () => {
+	it("does not flag Edit(**) since it stays within the working directory", () => {
 		expect(
 			check({ permissions: { allow: ["Edit(**)", "Read(**)"] } }).findings,
 		).toEqual([]);
 	});
 
-	it("サンドボックスの allowWrite では / がルート", () => {
+	it("treats / as root in sandbox allowWrite", () => {
 		const { findings } = check({
 			sandbox: { enabled: true, filesystem: { allowWrite: ["/"] } },
 		});
@@ -297,8 +297,8 @@ describe("パスの書き方", () => {
 	});
 });
 
-describe("効かないルールと引数の固定", () => {
-	it("Write(パス) は効かないので、危険とは判定せず消すよう勧める", () => {
+describe("ineffective rules and fixed arguments", () => {
+	it("recommends removing Write(path) as ineffective instead of flagging it as dangerous", () => {
 		const { findings, recommendations } = check({
 			permissions: { allow: ["Write(~/**)"] },
 		});
@@ -315,7 +315,7 @@ describe("効かないルールと引数の固定", () => {
 		]);
 	});
 
-	it("外に影響する操作は、引数を固定していても確認に移す", () => {
+	it("moves operations with external effects to ask even with fixed arguments", () => {
 		expect(
 			verdictOf({ permissions: { allow: ["Bash(git push)"] } }, "git push"),
 		).toBe("narrow");
@@ -323,7 +323,7 @@ describe("効かないルールと引数の固定", () => {
 });
 
 describe("Write(*)", () => {
-	it("括弧なしの Write と同じく、場所を限らない書き込みとして狭める", () => {
+	it("narrows it as unrestricted write, like bare Write", () => {
 		const { findings, recommendations } = check({
 			permissions: { allow: ["Write(*)"] },
 		});

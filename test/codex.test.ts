@@ -42,8 +42,8 @@ const NARROW_PROFILE = {
 	},
 };
 
-describe("サンドボックスなし", () => {
-	it("sandbox_mode の danger-full-access は、ワークスペースだけ書けて宛先を絞ったプロファイルに狭める", () => {
+describe("no sandbox", () => {
+	it("narrows sandbox_mode danger-full-access to a profile with workspace-only writes and restricted destinations", () => {
 		const toml =
 			'sandbox_mode = "danger-full-access"\napproval_policy = "never"\n';
 		const { findings } = check(toml);
@@ -58,20 +58,20 @@ describe("サンドボックスなし", () => {
 		});
 	});
 
-	it("default_permissions の :danger-full-access も同じに扱う", () => {
+	it("treats default_permissions :danger-full-access the same way", () => {
 		const { findings } = check('default_permissions = ":danger-full-access"\n');
 		expect(findings[0]?.ruleId).toBe("codex/danger-full-access");
 	});
 
-	it("名前が重なるときは別の名前のプロファイルを作る", () => {
+	it("creates a profile with a different name on name collision", () => {
 		const toml =
 			'default_permissions = ":danger-full-access"\n[permissions.project]\nextends = ":read-only"\n';
 		expect(proposal(toml).default_permissions).toBe("project-narrow");
 	});
 });
 
-describe("ネットワークの全許可", () => {
-	it("宛先を決めずにネットワークを有効にしたプロファイルは、宛先を絞る", () => {
+describe("allow-all network access", () => {
+	it("restricts destinations for a profile that enables network without specifying them", () => {
 		const toml =
 			'default_permissions = "dev"\n[permissions.dev]\nextends = ":workspace"\n[permissions.dev.network]\nenabled = true\n';
 		const { findings } = check(toml);
@@ -84,7 +84,7 @@ describe("ネットワークの全許可", () => {
 		});
 	});
 
-	it('"*" = "allow" はすべての宛先の許可として扱う', () => {
+	it('treats "*" = "allow" as allowing all destinations', () => {
 		const toml =
 			'[features]\nnetwork_proxy = true\n[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"*" = "allow"\n';
 		const p = proposal(toml) as {
@@ -96,7 +96,7 @@ describe("ネットワークの全許可", () => {
 		});
 	});
 
-	it("ドメインを絞っていても、プロキシが無効なら全許可として扱う", () => {
+	it("treats restricted domains as allow-all when the proxy is disabled", () => {
 		const toml =
 			'[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"api.openai.com" = "allow"\n';
 		const { findings } = check(toml);
@@ -111,13 +111,13 @@ describe("ネットワークの全許可", () => {
 		});
 	});
 
-	it("ドメインを絞ってプロキシも有効なら指摘しない", () => {
+	it("does not flag restricted domains with the proxy enabled", () => {
 		const toml =
 			'[features]\nnetwork_proxy = true\n[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"api.openai.com" = "allow"\n';
 		expect(check(toml).findings).toEqual([]);
 	});
 
-	it("旧来の network_access = true は、宛先を絞ったプロファイルに移す", () => {
+	it("migrates legacy network_access = true to a profile with restricted destinations", () => {
 		const toml =
 			'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\nwritable_roots = ["/tmp/build"]\n';
 		const { findings } = check(toml);
@@ -132,8 +132,8 @@ describe("ネットワークの全許可", () => {
 	});
 });
 
-describe("ホーム全体・ルート全体への書き込み", () => {
-	it("プロファイルの ~ への書き込みは、キャッシュの場所に狭める", () => {
+describe("writes to the whole home or root", () => {
+	it("narrows profile writes to ~ to cache locations", () => {
 		const toml = '[permissions.dev.filesystem]\n"~" = "write"\n';
 		const { findings } = check(toml);
 		expect(findings[0]?.ruleId).toBe("codex/write-home");
@@ -143,7 +143,7 @@ describe("ホーム全体・ルート全体への書き込み", () => {
 		});
 	});
 
-	it(":root への書き込みも指摘する", () => {
+	it("also flags writes to :root", () => {
 		expect(
 			check('[permissions.dev.filesystem]\n":root" = "write"\n').findings[0]
 				?.ruleId,
@@ -154,21 +154,21 @@ describe("ホーム全体・ルート全体への書き込み", () => {
 		).toBe("codex/write-home");
 	});
 
-	it("読み取りだけなら指摘しない", () => {
+	it("does not flag read-only access", () => {
 		expect(
 			check('[permissions.dev.filesystem]\n":root" = "read"\n').findings,
 		).toEqual([]);
 	});
 
-	it("旧来の writable_roots のホームも指摘する", () => {
+	it("also flags home in legacy writable_roots", () => {
 		const toml =
 			'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nwritable_roots = ["~"]\n';
 		expect(check(toml).findings[0]?.ruleId).toBe("codex/legacy-write-home");
 	});
 });
 
-describe("そのほか", () => {
-	it("すべての Unix ソケットの許可は採用しない", () => {
+describe("other", () => {
+	it("rejects allowing all Unix sockets", () => {
 		const toml =
 			"[permissions.dev.network]\ndangerously_allow_all_unix_sockets = true\n";
 		const f = check(toml).findings.find(
@@ -177,7 +177,7 @@ describe("そのほか", () => {
 		expect(f?.verdict).toBe("reject");
 	});
 
-	it("default_permissions と sandbox_mode を両方書くと、プロファイルが効かないことを指摘する", () => {
+	it("flags that the profile has no effect when both default_permissions and sandbox_mode are set", () => {
 		const toml =
 			'default_permissions = "dev"\nsandbox_mode = "workspace-write"\n';
 		const f = check(toml).findings.find(
@@ -186,13 +186,13 @@ describe("そのほか", () => {
 		expect(f?.verdict).toBe("reject");
 	});
 
-	it("標準の :workspace だけなら指摘しない", () => {
+	it("does not flag the built-in :workspace alone", () => {
 		expect(check('default_permissions = ":workspace"\n').findings).toEqual([]);
 	});
 });
 
-describe("足すとよい設定", () => {
-	it("秘密情報のファイルがあれば、プロファイルで読み取りを拒否する", () => {
+describe("recommended additions", () => {
+	it("denies reading secret files in the profile", () => {
 		const toml = 'default_permissions = ":workspace"\n';
 		expect(proposal(toml, { secretFiles: [".env"] })).toEqual({
 			default_permissions: "project",
@@ -205,7 +205,7 @@ describe("足すとよい設定", () => {
 		});
 	});
 
-	it("使っているプロファイルに足す", () => {
+	it("adds to the profile in use", () => {
 		const toml =
 			'default_permissions = "dev"\n[permissions.dev]\nextends = ":workspace"\n';
 		const p = proposal(toml, { secretFiles: [".env"] }) as {
@@ -219,20 +219,20 @@ describe("足すとよい設定", () => {
 		});
 	});
 
-	it("すでに拒否していれば勧めない", () => {
+	it("does not recommend when already denied", () => {
 		const toml =
 			'default_permissions = "dev"\n[permissions.dev.filesystem.":workspace_roots"]\n"**/.env" = "deny"\n';
 		expect(check(toml, { secretFiles: [".env"] }).recommendations).toEqual([]);
 	});
 
-	it("旧来の sandbox_mode を使っているときはプロファイルが効かないので勧めない", () => {
+	it("does not recommend when legacy sandbox_mode is used, since profiles have no effect", () => {
 		const toml = 'sandbox_mode = "workspace-write"\n';
 		expect(check(toml, { secretFiles: [".env"] }).recommendations).toEqual([]);
 	});
 });
 
-describe("sandbox_mode と default_permissions の併記", () => {
-	it("使われていない default_permissions のほうが広ければ、default_permissions を消す（権限を広げない）", () => {
+describe("both sandbox_mode and default_permissions set", () => {
+	it("removes the unused default_permissions when it is broader (does not widen permissions)", () => {
 		const toml =
 			'sandbox_mode = "workspace-write"\ndefault_permissions = ":danger-full-access"\n';
 		const { findings } = check(toml);
@@ -240,13 +240,13 @@ describe("sandbox_mode と default_permissions の併記", () => {
 		expect(proposal(toml)).toEqual({ sandbox_mode: "workspace-write" });
 	});
 
-	it("read-only から :workspace に広げない", () => {
+	it("does not widen read-only to :workspace", () => {
 		const toml =
 			'sandbox_mode = "read-only"\ndefault_permissions = ":workspace"\n';
 		expect(proposal(toml)).toEqual({ sandbox_mode: "read-only" });
 	});
 
-	it("プロファイルのほうが狭ければ、sandbox_mode を消して利用者のプロファイルを残す", () => {
+	it("removes sandbox_mode and keeps the user's profile when the profile is narrower", () => {
 		const toml =
 			'sandbox_mode = "danger-full-access"\ndefault_permissions = "a"\n[permissions.a]\nextends = ":read-only"\n';
 		const { findings } = check(toml);
@@ -258,14 +258,14 @@ describe("sandbox_mode と default_permissions の併記", () => {
 	});
 });
 
-describe("設定案を点検し直す", () => {
-	it("プロキシが有効で許可した宛先がなければ、外へ通信できないので指摘しない", () => {
+describe("re-checking the proposal", () => {
+	it("does not flag a proxy with no allowed destinations, since no outbound traffic is possible", () => {
 		const toml =
 			"[features]\nnetwork_proxy = true\n[permissions.dev.network]\nenabled = true\n";
 		expect(check(toml).findings).toEqual([]);
 	});
 
-	it("宛先の候補がなければネットワークを切る案を出し、その案には指摘が出ない", () => {
+	it("proposes disabling network when there are no candidate destinations, and that proposal has no findings", () => {
 		const toml = "[permissions.dev.network]\nenabled = true\n";
 		const noDomains = {
 			languages: [],
@@ -279,7 +279,7 @@ describe("設定案を点検し直す", () => {
 		expect(check(stringify(p), noDomains).findings).toEqual([]);
 	});
 
-	it("サンドボックスなしから作った案には、採用しない・狭めるの指摘が出ない", () => {
+	it("a proposal built from no-sandbox has no reject or narrow findings", () => {
 		const p = proposal('sandbox_mode = "danger-full-access"\n');
 		expect(
 			check(stringify(p)).findings.filter((f) => f.verdict !== "keep"),
@@ -287,8 +287,8 @@ describe("設定案を点検し直す", () => {
 	});
 });
 
-describe("併記で通信の広さも比べる", () => {
-	it("通信できない旧来の設定より、通信できるプロファイルのほうが広ければ、プロファイルを消す", () => {
+describe("comparing network scope when both are set", () => {
+	it("removes the profile when it allows network and is broader than the legacy setting without network", () => {
 		const toml = [
 			'sandbox_mode = "workspace-write"',
 			'default_permissions = "a"',

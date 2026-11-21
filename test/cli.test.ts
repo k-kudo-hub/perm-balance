@@ -39,24 +39,24 @@ const RISKY = {
 };
 
 describe("cli", () => {
-	it("判定ごとに指摘を表示し、狭めた設定案を示して、終了コード 1 を返す", () => {
+	it("prints findings per verdict, shows a narrowed proposal, and exits with code 1", () => {
 		const { code, out } = run([], makeDir(RISKY));
 		expect(code).toBe(1);
-		expect(out).toContain("採用しない");
+		expect(out).toContain("Reject");
 		expect(out).toContain('permissions.allow: "Bash(rm *)"');
-		expect(out).toContain("狭める");
-		expect(out).toContain("許可してよい");
+		expect(out).toContain("Narrow");
+		expect(out).toContain("OK to allow");
 		expect(out).toContain("[permissions.dev.network] enabled = true");
-		expect(out).toContain("狭めた設定案");
+		expect(out).toContain("Narrowed proposal");
 		expect(out).toContain('"Bash(npm run test *)"');
 	});
 
-	it("--no-proposal では設定案を表示しない", () => {
+	it("--no-proposal hides the proposal", () => {
 		const { out } = run(["--no-proposal"], makeDir(RISKY));
-		expect(out).not.toContain("狭めた設定案");
+		expect(out).not.toContain("Narrowed proposal");
 	});
 
-	it("--json では機械が読める形で出す", () => {
+	it("--json prints machine-readable output", () => {
 		const { code, out } = run(["--json"], makeDir(RISKY));
 		expect(code).toBe(1);
 		const report = JSON.parse(out);
@@ -69,7 +69,7 @@ describe("cli", () => {
 		});
 	});
 
-	it("指摘がなければ終了コード 0 を返す", () => {
+	it("exits with code 0 when there are no findings", () => {
 		const root = makeDir({
 			".claude/settings.json": JSON.stringify({
 				permissions: { allow: ["Bash(git status *)"] },
@@ -78,13 +78,13 @@ describe("cli", () => {
 		expect(run([], root).code).toBe(0);
 	});
 
-	it("設定ファイルがなければ、その旨を伝えて終了コード 0 を返す", () => {
+	it("reports missing settings files and exits with code 0", () => {
 		const { code, out } = run([], makeDir({}));
 		expect(code).toBe(0);
-		expect(out).toContain("設定ファイルが見つかりません");
+		expect(out).toContain("No settings file found");
 	});
 
-	it("引数のディレクトリを点検する", () => {
+	it("scans the directory given as an argument", () => {
 		const root = makeDir({
 			"sub/.codex/config.toml": 'sandbox_mode = "danger-full-access"\n',
 		});
@@ -93,7 +93,7 @@ describe("cli", () => {
 		expect(out).toContain("danger-full-access");
 	});
 
-	it("読めないファイルがあれば終了コード 2 を返す", () => {
+	it("exits with code 2 when a file cannot be read", () => {
 		const { code, err } = run(
 			[],
 			makeDir({ ".claude/settings.json": "{ broken" }),
@@ -102,14 +102,14 @@ describe("cli", () => {
 		expect(err).toContain(".claude/settings.json");
 	});
 
-	it("知らないオプションは使い方を出して終了コード 2 を返す", () => {
+	it("prints usage and exits with code 2 for an unknown option", () => {
 		const { code, err } = run(["--nope"], makeDir({}));
 		expect(code).toBe(2);
-		expect(err).toContain("使い方");
+		expect(err).toContain("Usage");
 	});
 });
 
-describe("設定案の表示", () => {
+describe("proposal output", () => {
 	const WITH_HOOKS = {
 		".claude/settings.json": JSON.stringify({
 			permissions: { allow: ["Bash(rm *)"] },
@@ -119,23 +119,23 @@ describe("設定案の表示", () => {
 			'model = "gpt-5"\nsandbox_mode = "danger-full-access"\n',
 	};
 
-	it("既定では変わる部分だけを表示し、権限と関係のない設定は出さない", () => {
+	it("by default shows only the changes and omits settings unrelated to permissions", () => {
 		const { out } = run([], makeDir(WITH_HOOKS));
-		expect(out).toContain("変わる部分だけ");
+		expect(out).toContain("only what changes");
 		expect(out).not.toContain("echo done");
 		expect(out).not.toContain('model = "gpt-5"');
-		expect(out).toContain("消す設定: sandbox_mode");
+		expect(out).toContain("Remove: sandbox_mode");
 	});
 
-	it("--full-proposal ではファイル全体を表示する", () => {
+	it("--full-proposal shows the whole file", () => {
 		const { out } = run(["--full-proposal"], makeDir(WITH_HOOKS));
 		expect(out).toContain("echo done");
 		expect(out).toContain('model = "gpt-5"');
 	});
 });
 
-describe("ユーザー全体の設定", () => {
-	it("プロジェクト固有の値を案に入れない理由を、ファイルごとに1回だけ表示する", () => {
+describe("user-wide settings", () => {
+	it("explains once per file why project-specific values are left out of the proposal", () => {
 		const root = makeDir({});
 		const home = makeDir({
 			".claude/settings.json": JSON.stringify({
@@ -149,6 +149,6 @@ describe("ユーザー全体の設定", () => {
 			stdout: (s) => (out += s),
 			stderr: () => {},
 		});
-		expect(out.split("各プロジェクトの設定で許可する").length - 1).toBe(1);
+		expect(out.split("in each project's own settings").length - 1).toBe(1);
 	});
 });

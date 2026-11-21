@@ -6,7 +6,7 @@ function isObj(value: unknown): value is Obj {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** path の親までたどり、なければ作る */
+/** Walks to the parent of path, creating it if missing */
 function parentOf(root: Obj, path: string[]): Obj {
 	let cur = root;
 	for (const key of path.slice(0, -1)) {
@@ -17,14 +17,14 @@ function parentOf(root: Obj, path: string[]): Obj {
 	return cur;
 }
 
-/** 設定オブジェクトに変更を順に反映した複製を返す。元のオブジェクトは変えない */
+/** Returns a copy with the patches applied in order. The original is not modified */
 export function applyPatches<T>(config: T, patches: Patch[]): T {
 	const root = structuredClone(config) as Obj;
 	for (const patch of patches) {
 		const last = patch.path.at(-1);
 		if (last === undefined) continue;
 		if (patch.op === "delete" || patch.op === "remove-from-array") {
-			// 消す変更では、ない階層を作らない
+			// Removals never create missing levels
 			const existing = patch.path
 				.slice(0, -1)
 				.reduce<unknown>(

@@ -1,11 +1,11 @@
 import type { Level, Verdict } from "./types.js";
 
 /**
- * リスクと利便性から判定を決める。
+ * Decides the verdict from risk and convenience.
  *
- * - 利便性が小さい → 採用しない（reject）。最小から渡すので、役に立たない許可は渡さない
- * - リスクが小さく、利便性がある → 許可してよい（keep）
- * - リスクも利便性もある → 利便性を残したまま範囲を狭める（narrow）
+ * - Low convenience → reject. Start from the least privilege: do not grant what does not help
+ * - Low risk with some convenience → keep (OK to allow)
+ * - Both risk and convenience → narrow the scope while keeping the convenience
  */
 export function decideVerdict(risk: Level, convenience: Level): Verdict {
 	if (convenience === "low") return "reject";

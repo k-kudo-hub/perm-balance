@@ -16,7 +16,7 @@ function makeDir(files: Record<string, string>): string {
 }
 
 describe("scan", () => {
-	it("プロジェクトの設定ファイルを見つけて点検し、設定案を作る", () => {
+	it("finds and checks project settings files and builds a proposal", () => {
 		const root = makeDir({
 			"package.json": JSON.stringify({ scripts: { test: "vitest" } }),
 			".claude/settings.json": JSON.stringify({
@@ -42,7 +42,7 @@ describe("scan", () => {
 		expect(parse(codex?.proposal ?? "").default_permissions).toBe("project");
 	});
 
-	it("許可してよい設定しかなければ、設定案を作らない", () => {
+	it("builds no proposal when all settings are acceptable", () => {
 		const root = makeDir({
 			".claude/settings.json": JSON.stringify({
 				permissions: { allow: ["Bash(git status *)"] },
@@ -57,7 +57,7 @@ describe("scan", () => {
 		expect(report?.proposal).toBeUndefined();
 	});
 
-	it("includeUser のときはユーザーの設定も読み、ユーザーの設定として扱う", () => {
+	it("with includeUser, also reads user settings and treats them as user-scoped", () => {
 		const root = makeDir({});
 		const home = makeDir({
 			".claude/settings.json": JSON.stringify({
@@ -71,7 +71,7 @@ describe("scan", () => {
 		expect(reports[0]?.findings[0]?.ruleId).toBe("claude/bypass-permissions");
 	});
 
-	it("指定したファイルを拡張子で見分けて読む", () => {
+	it("reads specified files, detecting the format by extension", () => {
 		const root = makeDir({
 			"custom/codex.toml": "[sandbox_workspace_write]\nnetwork_access = true\n",
 		});
@@ -85,7 +85,7 @@ describe("scan", () => {
 		expect(reports[0]?.file).toBe("custom/codex.toml");
 	});
 
-	it("読めないファイルは理由を返す", () => {
+	it("returns the reason for unreadable files", () => {
 		const root = makeDir({ ".claude/settings.json": "{ broken" });
 		const [report] = scan({
 			root,
@@ -98,8 +98,8 @@ describe("scan", () => {
 	});
 });
 
-describe("ユーザー全体の設定", () => {
-	it("プロジェクト固有のコマンドを案に入れず、その理由を添える", () => {
+describe("user-wide settings", () => {
+	it("leaves project-specific commands out of the proposal and explains why", () => {
 		const root = makeDir({
 			"package.json": JSON.stringify({ scripts: { test: "vitest" } }),
 		});
@@ -116,13 +116,13 @@ describe("ユーザー全体の設定", () => {
 			"Bash(git log *)",
 		]);
 		expect(report?.findings[0]?.suggestion?.summary).not.toContain(
-			"各プロジェクトの設定で許可する",
+			"in each project's own settings",
 		);
 	});
 });
 
-describe("設定案を点検し直す", () => {
-	it("設定案に置き換えて点検し直すと、採用しない・狭めるの指摘が出ない", () => {
+describe("re-checking the proposal", () => {
+	it("re-checking after applying the proposal yields no reject or narrow findings", () => {
 		const root = makeDir({
 			"package.json": JSON.stringify({ scripts: { test: "vitest" } }),
 			".env": "",

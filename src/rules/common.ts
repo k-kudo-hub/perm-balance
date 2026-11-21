@@ -10,7 +10,7 @@ import type {
 import { decideVerdict } from "../verdict.js";
 
 export interface RuleContext {
-	/** 表示用のファイルのパス */
+	/** File path for display */
 	file: string;
 	scope: Scope;
 	facts: ProjectFacts;
@@ -31,9 +31,9 @@ export interface Assessment {
 	suggestion?: Suggestion;
 }
 
-/** ユーザー全体の設定はすべてのプロジェクトに効くため、プロジェクト固有の値を案に入れない */
+/** User-wide settings apply to every project, so proposals for them never include project-specific values */
 export const USER_SCOPE_NOTE =
-	"ユーザー全体の設定はすべてのプロジェクトに効くため、案にはプロジェクト固有のコマンド・宛先・書き込み先を入れていない。それらは各プロジェクトの設定で許可する";
+	"User-wide settings apply to every project, so the proposal leaves out project-specific commands, domains and write paths. Allow those in each project's own settings.";
 
 export function toFinding(
 	agent: Agent,

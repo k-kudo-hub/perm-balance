@@ -7,27 +7,27 @@ import { parseArgs } from "node:util";
 import { renderText, summarize } from "./render.js";
 import { scan } from "./scan.js";
 
-const USAGE = `使い方: perm-balance [ディレクトリ] [オプション]
+const USAGE = `Usage: perm-balance [directory] [options]
 
-AI エージェント（Claude Code・Codex）の権限設定を、リスクと利便性のバランスで点検します。
-ディレクトリを省くと、いまのディレクトリを点検します。
+Checks the permission settings of AI agents (Claude Code, Codex) by balancing risk and convenience.
+Without a directory, checks the current directory.
 
-点検するファイル:
-  <ディレクトリ>/.claude/settings.json, .claude/settings.local.json, .codex/config.toml
-  --user を付けると ~/.claude/settings.json と ~/.codex/config.toml も
+Files checked:
+  <directory>/.claude/settings.json, .claude/settings.local.json, .codex/config.toml
+  with --user, also ~/.claude/settings.json and ~/.codex/config.toml
 
-オプション:
-  --user            ユーザー全体の設定も点検する
-  --file <パス>     このファイルも点検する（.toml は Codex、それ以外は Claude Code として読む）。何度でも指定できる
-  --json            結果を JSON で出す
-  --no-proposal     狭めた設定案を表示しない
-  --full-proposal   狭めた設定案を、変わる部分だけでなくファイル全体で表示する
-  -h, --help        この使い方を表示する
+Options:
+  --user            Also check user-wide settings
+  --file <path>     Also check this file (.toml is read as Codex, anything else as Claude Code). Repeatable
+  --json            Print the result as JSON
+  --no-proposal     Do not print the narrowed proposal
+  --full-proposal   Print the whole proposed file, not just the parts that change
+  -h, --help        Show this help
 
-終了コード:
-  0  採用しない・狭めるの指摘がない
-  1  採用しない・狭めるの指摘がある
-  2  オプションの誤り、または読めない設定ファイルがある
+Exit codes:
+  0  No reject or narrow findings
+  1  At least one reject or narrow finding
+  2  Invalid options, or a settings file could not be read
 `;
 
 export interface Io {
@@ -51,7 +51,7 @@ export function main(argv: string[], io: Io): number {
 		return 0;
 	}
 	if (positionals.length > 1) {
-		io.stderr(`ディレクトリは1つだけ指定できます\n\n${USAGE}`);
+		io.stderr(`Only one directory can be given\n\n${USAGE}`);
 		return 2;
 	}
 	const root = resolve(io.cwd, positionals[0] ?? ".");
@@ -74,8 +74,7 @@ export function main(argv: string[], io: Io): number {
 		io.stdout(renderText(reports, mode));
 	}
 	const errors = reports.filter((r) => r.error);
-	for (const r of errors)
-		io.stderr(`読めませんでした: ${r.file}: ${r.error}\n`);
+	for (const r of errors) io.stderr(`Could not read: ${r.file}: ${r.error}\n`);
 	if (errors.length > 0) return 2;
 	return summary.reject + summary.narrow > 0 ? 1 : 0;
 }

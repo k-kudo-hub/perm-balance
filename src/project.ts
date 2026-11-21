@@ -5,7 +5,7 @@ import { join } from "node:path";
 export type Language = "node" | "python" | "rust" | "go";
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
-/** 設定案を作るためにプロジェクトのファイル構成から読み取った事実 */
+/** Facts read from the project's files, used to build proposals */
 export interface ProjectFacts {
 	root: string;
 	languages: Language[];
@@ -52,7 +52,7 @@ function readMakeTargets(root: string): string[] {
 	if (text === undefined) return [];
 	const targets: string[] = [];
 	for (const line of text.split("\n")) {
-		// `name:` か `name: deps`。`name := value` のような変数代入と `.PHONY` のような特殊ターゲットは除く
+		// `name:` or `name: deps`, excluding assignments like `name := value` and special targets like `.PHONY`
 		const m = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*:(?![:=])/.exec(line);
 		if (m?.[1] && !targets.includes(m[1])) targets.push(m[1]);
 	}
@@ -78,7 +78,7 @@ function isSecretName(name: string): boolean {
 	return ["id_rsa", "id_ed25519", "credentials.json"].includes(name);
 }
 
-/** 深さ2までのファイルから、秘密情報らしいものを探す */
+/** Looks for secret-looking files up to depth 2 */
 function findSecretFiles(root: string, rel = "", depth = 0): string[] {
 	if (depth > 2) return [];
 	let entries: import("node:fs").Dirent[];
@@ -125,7 +125,7 @@ function readGitHosts(root: string): string[] {
 	return hosts;
 }
 
-/** ユーザー全体の設定を点検するときに使う、プロジェクト固有の事実を持たない値 */
+/** Facts with nothing project-specific, used when checking user-wide settings */
 export function emptyFacts(root: string): ProjectFacts {
 	return {
 		root,
@@ -163,9 +163,9 @@ export function readProjectFacts(root: string): ProjectFacts {
 }
 
 /**
- * 許可してよい Bash コマンドの候補。
- * リポジトリに書かれたスクリプトや、各言語の標準のビルド・テストに限ることで、
- * 毎回の確認を減らす利便性を残しつつ、任意のコマンドは許さない。
+ * Bash commands that are fine to allow.
+ * Limiting them to scripts defined in the repository and each language's standard build and test commands
+ * keeps the convenience of fewer confirmations without allowing arbitrary commands.
  */
 export function allowCandidates(facts: ProjectFacts): string[] {
 	const rules = ["Bash(git status *)", "Bash(git diff *)", "Bash(git log *)"];
@@ -193,7 +193,7 @@ const REGISTRIES: Record<Language, string[]> = {
 	go: ["proxy.golang.org", "sum.golang.org"],
 };
 
-/** ネットワークを全許可する代わりに許可するドメインの候補 */
+/** Domains to allow instead of the whole network */
 export function networkDomains(facts: ProjectFacts): string[] {
 	const domains = facts.languages.flatMap((lang) => REGISTRIES[lang]);
 	for (const host of facts.gitHosts)
@@ -201,7 +201,7 @@ export function networkDomains(facts: ProjectFacts): string[] {
 	return domains;
 }
 
-/** ホーム全体への書き込みの代わりに許可する場所の候補（各ツールの既定のキャッシュ・作業場所） */
+/** Paths to allow instead of the whole home directory (each tool's default cache or work directory) */
 export function homeWriteCandidates(facts: ProjectFacts): string[] {
 	const dirs: string[] = [];
 	if (facts.packageManager === "npm") dirs.push("~/.npm");
@@ -211,8 +211,8 @@ export function homeWriteCandidates(facts: ProjectFacts): string[] {
 }
 
 /**
- * 見つかった秘密情報のファイルを読ませないためのパターン（gitignore 形式）。
- * `.env.*` のようにまとめると見本のファイル（.env.example）まで読めなくなるため、鍵（.pem・.key）以外はファイル名ごとに書く
+ * Patterns (gitignore style) that deny reads of the secret files found.
+ * A catch-all like `.env.*` would also block samples such as .env.example, so everything except keys (.pem, .key) is listed by file name
  */
 export function secretDenyGlobs(facts: ProjectFacts): string[] {
 	const names = [

@@ -21,7 +21,7 @@ function makeProject(files: Record<string, string>): string {
 }
 
 describe("readProjectFacts", () => {
-	it("ロックファイルからパッケージマネージャーを、package.json からスクリプトを読む", () => {
+	it("reads the package manager from the lockfile and scripts from package.json", () => {
 		const root = makeProject({
 			"package.json": JSON.stringify({
 				scripts: { test: "vitest", lint: "biome check ." },
@@ -34,7 +34,7 @@ describe("readProjectFacts", () => {
 		expect(facts.languages).toContain("node");
 	});
 
-	it("Makefile のターゲットを読み、特殊ターゲットと変数代入を除く", () => {
+	it("reads Makefile targets, excluding special targets and variable assignments", () => {
 		const root = makeProject({
 			Makefile:
 				".PHONY: test\nCC := gcc\ntest:\n\tgo test ./...\nbuild: deps\n\tgo build\n",
@@ -42,7 +42,7 @@ describe("readProjectFacts", () => {
 		expect(readProjectFacts(root).makeTargets).toEqual(["test", "build"]);
 	});
 
-	it("秘密情報らしいファイルを見つけ、見本のファイルは除く", () => {
+	it("finds likely secret files, excluding example files", () => {
 		const root = makeProject({
 			".env": "A=1",
 			".env.example": "A=",
@@ -55,7 +55,7 @@ describe("readProjectFacts", () => {
 		]);
 	});
 
-	it("言語をマニフェストから見分ける", () => {
+	it("detects languages from manifests", () => {
 		const root = makeProject({
 			"Cargo.toml": "",
 			"go.mod": "",
@@ -70,7 +70,7 @@ describe("readProjectFacts", () => {
 });
 
 describe("allowCandidates", () => {
-	it("スクリプトとターゲットから、許可してよいコマンドの候補を作る", () => {
+	it("builds allowable command candidates from scripts and targets", () => {
 		const root = makeProject({
 			"package.json": JSON.stringify({ scripts: { test: "vitest" } }),
 			Makefile: "build:\n\techo\n",
@@ -84,7 +84,7 @@ describe("allowCandidates", () => {
 		]);
 	});
 
-	it("Rust と Go では標準のビルド・テストのコマンドを候補にする", () => {
+	it("uses the standard build and test commands for Rust and Go", () => {
 		const root = makeProject({ "Cargo.toml": "", "go.mod": "" });
 		const candidates = allowCandidates(readProjectFacts(root));
 		expect(candidates).toContain("Bash(cargo test *)");
@@ -93,7 +93,7 @@ describe("allowCandidates", () => {
 });
 
 describe("networkDomains", () => {
-	it("使っている言語のパッケージレジストリと、Git のリモートのホストを返す", () => {
+	it("returns package registries for the languages used and the Git remote host", () => {
 		const facts = {
 			...readProjectFacts(makeProject({ "package.json": "{}" })),
 			gitHosts: ["github.com"],
@@ -103,7 +103,7 @@ describe("networkDomains", () => {
 });
 
 describe("homeWriteCandidates", () => {
-	it("言語ごとの既定のキャッシュの置き場所を返す", () => {
+	it("returns the default cache locations per language", () => {
 		const facts = readProjectFacts(
 			makeProject({ "package.json": "{}", "Cargo.toml": "" }),
 		);
@@ -112,7 +112,7 @@ describe("homeWriteCandidates", () => {
 });
 
 describe("secretDenyGlobs", () => {
-	it("鍵はまとめ、それ以外はファイル名ごとに拒否するパターンを返す（見本のファイルは読めるまま）", () => {
+	it("returns deny patterns, grouping keys and listing others by file name (example files stay readable)", () => {
 		const facts = readProjectFacts(
 			makeProject({
 				".env": "",
@@ -129,7 +129,7 @@ describe("secretDenyGlobs", () => {
 		]);
 	});
 
-	it("秘密情報がなければ空", () => {
+	it("returns empty when there are no secrets", () => {
 		expect(secretDenyGlobs(readProjectFacts(makeProject({})))).toEqual([]);
 	});
 });

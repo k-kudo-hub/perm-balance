@@ -1,7 +1,7 @@
 {
 	"name": "perm-balance",
 	"version": "0.1.0",
-	"description": "AI エージェント（Claude Code・Codex）の権限設定を、リスクと利便性のバランスで点検する CLI",
+	"description": "Check AI agent (Claude Code, Codex) permission settings by balancing risk and convenience",
 	"type": "module",
 	"bin": {
 		"perm-balance": "dist/cli.js"
