@@ -168,13 +168,24 @@ function profileNetwork(config: unknown, name: string): boolean {
 	return false;
 }
 
-/** Whether the legacy settings allow network access */
+/**
+ * Whether the legacy settings allow network access to every destination.
+ * With the proxy on, legacy traffic is limited to [features.network_proxy] domains, which reach every host only with "*" = "allow"
+ */
 function legacyNetwork(config: unknown, sandboxMode: string): boolean {
 	if (sandboxMode === "danger-full-access") return true;
-	return (
-		sandboxMode === "workspace-write" &&
-		get(config, ["sandbox_workspace_write", "network_access"]) === true
-	);
+	if (
+		sandboxMode !== "workspace-write" ||
+		get(config, ["sandbox_workspace_write", "network_access"]) !== true
+	)
+		return false;
+	return !proxyOn(config) || legacyAllowsAll(config);
+}
+
+/** Whether [features.network_proxy] domains allow every public host */
+function legacyAllowsAll(config: unknown): boolean {
+	const domains = get(config, ["features", "network_proxy", "domains"]);
+	return isObj(domains) && domains["*"] === "allow";
 }
 
 /** Whether the network proxy is started: `[features] network_proxy = true`, or `enabled = true` in the `[features.network_proxy]` table */
@@ -224,6 +235,31 @@ function narrowNetwork(
 				path: [...base, "domains", d],
 				value: "allow",
 			}),
+		),
+	];
+}
+
+/**
+ * Patches that replace "*" in [features.network_proxy] domains with this project's destinations, for the legacy settings.
+ * With no candidate domains, turn the legacy network off instead
+ */
+function narrowFeatureDomains(ctx: RuleContext): Patch[] {
+	const base = ["features", "network_proxy", "domains"];
+	const domains = networkDomains(ctx.facts);
+	if (domains.length === 0) {
+		return [
+			{
+				op: "set",
+				path: ["sandbox_workspace_write", "network_access"],
+				value: false,
+			},
+			{ op: "delete", path: [...base, "*"] },
+		];
+	}
+	return [
+		{ op: "delete", path: [...base, "*"] },
+		...domains.map(
+			(d): Patch => ({ op: "set", path: [...base, d], value: "allow" }),
 		),
 	];
 }
@@ -463,7 +499,26 @@ function checkLegacy(
 	}
 	const legacy = get(config, ["sandbox_workspace_write"]);
 	if (sandboxMode !== "workspace-write" || !isObj(legacy)) return out;
-	if (legacy.network_access === true) {
+	if (legacy.network_access === true && proxyOn(config)) {
+		// With the proxy on, the legacy network is constrained by [features.network_proxy] domains
+		// (allowlist-first: no allow rule means no external destination). Only "*" opens every public host
+		if (legacyAllowsAll(config)) {
+			out.push({
+				ruleId: "codex/legacy-network-all",
+				setting:
+					'[features.network_proxy.domains] "*" = "allow" with [sandbox_workspace_write] network_access = true',
+				risk: "high",
+				riskReason: `"*" allows every public host through the proxy. ${NETWORK_RISK}`,
+				convenience: "high",
+				convenienceReason: "Never stops on package downloads or API calls",
+				suggestion: {
+					summary:
+						'Replace "*" with only the destinations this project uses (turn the legacy network off if there are none)',
+					patches: narrowFeatureDomains(ctx),
+				},
+			});
+		}
+	} else if (legacy.network_access === true) {
 		out.push({
 			ruleId: "codex/legacy-network-all",
 			setting: "[sandbox_workspace_write] network_access = true",

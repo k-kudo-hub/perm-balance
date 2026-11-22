@@ -132,6 +132,104 @@ describe("allow-all network access", () => {
 	});
 });
 
+describe("legacy network access with the feature-level domain policy", () => {
+	// Agent approvals & security: "Network on + `network_proxy` on: network stays on, and outbound traffic is
+	// constrained by the configured network policy", with the policy in [features.network_proxy] domains
+	const LEGACY =
+		'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n';
+
+	it("does not flag legacy network access when the proxy enforces scoped domains", () => {
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\n[features.network_proxy.domains]\n"api.openai.com" = "allow"\n`;
+		expect(check(toml).findings).toEqual([]);
+	});
+
+	it("does not flag legacy network access when the proxy allows no domains", () => {
+		// "Unset by default, which means no external destinations are allowed until you add `allow` rules"
+		expect(
+			check(`${LEGACY}[features]\nnetwork_proxy = true\n`).findings,
+		).toEqual([]);
+	});
+
+	it("still flags legacy network access when the proxy is configured but not enabled", () => {
+		const toml = `${LEGACY}[features.network_proxy]\n[features.network_proxy.domains]\n"api.openai.com" = "allow"\n`;
+		expect(check(toml).findings[0]?.ruleId).toBe("codex/legacy-network-all");
+	});
+
+	it('narrows "*" in the feature-level domains to this project\'s destinations', () => {
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\n[features.network_proxy.domains]\n"*" = "allow"\n"example.com" = "deny"\n`;
+		const { findings } = check(toml);
+		expect(findings).toHaveLength(1);
+		expect(findings[0]?.ruleId).toBe("codex/legacy-network-all");
+		expect(findings[0]?.setting).toBe(
+			'[features.network_proxy.domains] "*" = "allow" with [sandbox_workspace_write] network_access = true',
+		);
+		expect(findings[0]?.verdict).toBe("narrow");
+		expect(proposal(toml)).toEqual({
+			sandbox_mode: "workspace-write",
+			sandbox_workspace_write: { network_access: true },
+			features: {
+				network_proxy: {
+					enabled: true,
+					domains: {
+						"example.com": "deny",
+						"registry.npmjs.org": "allow",
+						"github.com": "allow",
+					},
+				},
+			},
+		});
+	});
+
+	it('narrows "*" written in an inline domains table', () => {
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\ndomains = { "*" = "allow", "example.com" = "deny" }\n`;
+		expect(proposal(toml).features).toEqual({
+			network_proxy: {
+				enabled: true,
+				domains: {
+					"example.com": "deny",
+					"registry.npmjs.org": "allow",
+					"github.com": "allow",
+				},
+			},
+		});
+	});
+
+	it('does not flag "*" = "deny", which is not an allow-all rule', () => {
+		// "global `*` is only valid for allow rules"
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\n[features.network_proxy.domains]\n"*" = "deny"\n`;
+		expect(check(toml).findings).toEqual([]);
+	});
+
+	it("keeps the legacy settings when the proxy keeps them narrower than an ignored profile with network", () => {
+		// Removing sandbox_mode would move from no external destination to the profile's github.com
+		const toml = `default_permissions = "dev"\n${LEGACY}[features]\nnetwork_proxy = true\n[permissions.dev]\nextends = ":workspace"\n[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"github.com" = "allow"\n`;
+		const { findings } = check(toml);
+		expect(findings.map((f) => f.ruleId)).toEqual(["codex/profile-ignored"]);
+		expect(findings[0]?.suggestion?.patches).toEqual([
+			{ op: "delete", path: ["default_permissions"] },
+		]);
+	});
+
+	it('turns legacy network access off when "*" is allowed and the project has no destinations', () => {
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\n[features.network_proxy.domains]\n"*" = "allow"\n`;
+		const none = { languages: [], packageManager: undefined, gitHosts: [] };
+		expect(check(toml, none).findings[0]?.suggestion?.summary).toBe(
+			'Replace "*" with only the destinations this project uses (turn the legacy network off if there are none)',
+		);
+		expect(
+			proposal(toml, {
+				languages: [],
+				packageManager: undefined,
+				gitHosts: [],
+			}),
+		).toEqual({
+			sandbox_mode: "workspace-write",
+			sandbox_workspace_write: { network_access: false },
+			features: { network_proxy: { enabled: true, domains: {} } },
+		});
+	});
+});
+
 describe("writes to the whole home or root", () => {
 	it("narrows profile writes to ~ to cache locations", () => {
 		const toml = '[permissions.dev.filesystem]\n"~" = "write"\n';
