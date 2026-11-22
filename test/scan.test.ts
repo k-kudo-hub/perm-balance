@@ -363,3 +363,106 @@ describe("user-wide sandbox_mode with a project permission profile", () => {
 		}
 	});
 });
+
+describe("Codex project trust", () => {
+	const CODEX = ".codex/config.toml";
+	const PROFILE = 'default_permissions = ":read-only"\n';
+
+	function scanWithTrust(
+		userToml: (root: string) => string,
+		projectToml: string,
+		includeUser = true,
+	) {
+		const root = makeDir({ [CODEX]: projectToml });
+		const home = makeDir({ [CODEX]: userToml(root) });
+		const reports = scan({ root, home, includeUser, files: [] });
+		return {
+			project: reports.find((r) => r.scope === "project"),
+			user: reports.find((r) => r.scope === "user"),
+			reports,
+		};
+	}
+	const trustEntry = (level: string) => (root: string) =>
+		`sandbox_mode = "workspace-write"\n[projects."${root}"]\ntrust_level = "${level}"\n`;
+
+	it("does not check the project's .codex/config.toml when the project is untrusted, and says Codex does not load it", () => {
+		const { project } = scanWithTrust(
+			trustEntry("untrusted"),
+			'sandbox_mode = "danger-full-access"\n',
+		);
+		expect(project?.findings).toEqual([]);
+		expect(project?.recommendations).toEqual([]);
+		expect(project?.proposal).toBeUndefined();
+		expect(project?.notLoaded).toContain("untrusted");
+	});
+
+	it("does not flag the user's sandbox_mode against the profile of an untrusted project", () => {
+		const { user } = scanWithTrust(trustEntry("untrusted"), PROFILE);
+		expect(
+			user?.findings.filter((f) => f.ruleId === "codex/profile-ignored"),
+		).toEqual([]);
+	});
+
+	it("still checks a project with no saved trust, noting that Codex loads it only after trusting", () => {
+		const { project, user } = scanWithTrust(
+			() => 'sandbox_mode = "workspace-write"\n',
+			PROFILE,
+		);
+		expect(project?.notLoaded).toBeUndefined();
+		expect(project?.note).toContain("only after you trust");
+		expect(
+			user?.findings.filter((f) => f.ruleId === "codex/profile-ignored"),
+		).toHaveLength(1);
+		const danger = scanWithTrust(
+			() => "",
+			'sandbox_mode = "danger-full-access"\n',
+		);
+		expect(danger.project?.findings.length).toBeGreaterThan(0);
+		expect(danger.project?.note).toContain("only after you trust");
+	});
+
+	it("checks a trusted project as before, without a note", () => {
+		const { project, user } = scanWithTrust(trustEntry("trusted"), PROFILE);
+		expect(project?.note).toBeUndefined();
+		expect(project?.notLoaded).toBeUndefined();
+		expect(
+			user?.findings.filter((f) => f.ruleId === "codex/profile-ignored"),
+		).toHaveLength(1);
+	});
+
+	it("does not read trust without --user", () => {
+		const { project } = scanWithTrust(
+			trustEntry("untrusted"),
+			'sandbox_mode = "danger-full-access"\n',
+			false,
+		);
+		expect(project?.notLoaded).toBeUndefined();
+		expect(project?.note).toBeUndefined();
+		expect(project?.findings.length).toBeGreaterThan(0);
+	});
+
+	it("does not decide trust when ~/.codex/config.toml cannot be read", () => {
+		const { project, user } = scanWithTrust(
+			() => "not = [valid toml",
+			'sandbox_mode = "danger-full-access"\n',
+		);
+		expect(user?.error).toBeDefined();
+		expect(project?.notLoaded).toBeUndefined();
+		expect(project?.note).toBeUndefined();
+		expect(project?.findings.length).toBeGreaterThan(0);
+	});
+
+	it("leaves Claude Code settings alone in an untrusted Codex project", () => {
+		const root = makeDir({
+			[CODEX]: 'sandbox_mode = "danger-full-access"\n',
+			".claude/settings.json": JSON.stringify({
+				permissions: { allow: ["Bash(*)"] },
+			}),
+		});
+		const home = makeDir({ [CODEX]: trustEntry("untrusted")(root) });
+		const reports = scan({ root, home, includeUser: true, files: [] });
+		const claude = reports.find((r) => r.agent === "claude-code");
+		expect(claude?.notLoaded).toBeUndefined();
+		expect(claude?.findings.length).toBeGreaterThan(0);
+	});
+});

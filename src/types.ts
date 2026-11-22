@@ -64,4 +64,8 @@ export interface FileReport {
 	removedKeys?: string[];
 	/** Why the file could not be read */
 	error?: string;
+	/** Why the agent does not load this file. The file is not checked, so there are no findings */
+	notLoaded?: string;
+	/** When the file takes effect, if it does not yet */
+	note?: string;
 }

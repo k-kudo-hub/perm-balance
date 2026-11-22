@@ -6,6 +6,7 @@ import { emptyFacts, readProjectFacts } from "./project.js";
 import { checkClaudeSettings } from "./rules/claude.js";
 import { checkCodexConfig } from "./rules/codex.js";
 import type { RuleResult } from "./rules/common.js";
+import { type CodexTrust, codexProjectTrust } from "./trust.js";
 import type { Agent, FileReport, Scope } from "./types.js";
 
 export interface ScanOptions {
@@ -86,6 +87,14 @@ function displayPath(path: string, opts: ScanOptions): string {
 	return path;
 }
 
+function notLoadedReason(key: string): string {
+	return `Codex does not load this file: ${key} is marked as untrusted in ~/.codex/config.toml (projects."${key}".trust_level). Its settings take no effect, so they are not checked.`;
+}
+
+function untrustedYetNote(key: string): string {
+	return `Codex loads this file only after you trust the project: ~/.codex/config.toml has no trust_level for ${key}. Until then its settings take no effect; the findings show what applies once you trust it.`;
+}
+
 export function scan(opts: ScanOptions): FileReport[] {
 	const facts = readProjectFacts(opts.root);
 	const parsed = discover(opts).map((target) => {
@@ -113,12 +122,22 @@ export function scan(opts: ScanOptions): FileReport[] {
 			? { config: p.config, file: p.file }
 			: undefined;
 	};
-	const userLayer = layerAt(join(opts.home, ".codex/config.toml"));
-	const projectLayer = layerAt(join(opts.root, ".codex/config.toml"));
+	const userCodexPath = join(opts.home, ".codex/config.toml");
+	const projectCodexPath = join(opts.root, ".codex/config.toml");
+	const userLayer = layerAt(userCodexPath);
+	// Codex loads the project's .codex/ layer only when ~/.codex/config.toml trusts the project.
+	// Trust is known only with --user, and only when that file could be read (or does not exist)
+	const userParsed = parsed.find((x) => x.target.path === userCodexPath);
+	const trust: CodexTrust | undefined =
+		opts.includeUser && userParsed?.error === undefined
+			? codexProjectTrust(userLayer?.config, opts.root)
+			: undefined;
+	const untrusted = trust?.level === "untrusted";
+	const projectLayer = untrusted ? undefined : layerAt(projectCodexPath);
 	const otherLayer = (path: string) =>
-		path === join(opts.home, ".codex/config.toml")
+		path === userCodexPath
 			? projectLayer
-			: path === join(opts.root, ".codex/config.toml")
+			: path === projectCodexPath
 				? userLayer
 				: undefined;
 
@@ -131,6 +150,15 @@ export function scan(opts: ScanOptions): FileReport[] {
 			recommendations: [],
 		};
 		if (error !== undefined) return { ...base, error };
+		const isProjectCodex =
+			target.path === projectCodexPath && target.agent === "codex";
+		if (isProjectCodex && trust?.level === "untrusted") {
+			return { ...base, notLoaded: notLoadedReason(trust.key) };
+		}
+		const note =
+			isProjectCodex && trust !== undefined && trust.level === undefined
+				? untrustedYetNote(trust.key)
+				: undefined;
 		const ctx = {
 			file,
 			scope: target.scope,
@@ -148,7 +176,8 @@ export function scan(opts: ScanOptions): FileReport[] {
 				.flatMap((f) => f.suggestion?.patches ?? []),
 			...result.recommendations.flatMap((r) => r.patches),
 		];
-		if (patches.length === 0) return { ...base, ...result };
+		const withNote = note === undefined ? base : { ...base, note };
+		if (patches.length === 0) return { ...withNote, ...result };
 		const original = config as Record<string, unknown>;
 		const proposed = applyPatches(original, patches);
 		const format = (obj: Record<string, unknown>) =>
@@ -165,7 +194,7 @@ export function scan(opts: ScanOptions): FileReport[] {
 			(key) => !(key in proposed),
 		);
 		return {
-			...base,
+			...withNote,
 			...result,
 			proposal: format(proposed),
 			proposalChanges:

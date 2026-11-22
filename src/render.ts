@@ -65,6 +65,11 @@ function renderFile(report: FileReport, mode: ProposalMode): string {
 		out.push(`Could not read: ${report.error}`, "");
 		return out.join("\n");
 	}
+	if (report.notLoaded) {
+		out.push(`Not checked: ${report.notLoaded}`, "");
+		return out.join("\n");
+	}
+	if (report.note) out.push(`Note: ${report.note}`, "");
 	if (
 		report.scope === "user" &&
 		(report.findings.length > 0 || report.recommendations.length > 0)
