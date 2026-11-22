@@ -151,6 +151,7 @@ Narrowed proposal (only what changes; everything else stays. Use --full-proposal
 | `dangerously_allow_all_unix_sockets = true`・`dangerously_allow_non_loopback_proxy = true`（プロファイルと `[features.network_proxy]` のどちらでも） | 採用しない                                                                                                                                                                      |
 | `default_permissions` と `sandbox_mode` の併記（`sandbox_mode` だけが効く）                                                                          | 採用しない。書き込みの範囲と通信を比べて広いほうを消し、狭いほうを効かせる                                                                                                      |
 | `--user` のとき、`~/.codex/config.toml` の `sandbox_mode` がプロジェクトの `default_permissions` を無効にしている                                    | 採用しない。プロジェクトのプロファイルが狭ければユーザー設定の `sandbox_mode` を同じ広さのプロファイルに置き換え、広ければプロジェクトの使われないプロファイルを消す            |
+| `--user` のとき、`~/.codex/config.toml` で `trust_level = "untrusted"` にしたプロジェクト                                                            | 点検しない。Codex はプロジェクトの `.codex/config.toml` を読まない。信頼の設定がなければ点検したうえで、信頼するまで Codex は読まないと添える                                   |
 | 秘密情報のファイルがあるのに読み取りを拒否していない                                                                                                 | 足すとよい（`"**/.env" = "deny"` と `glob_scan_max_depth`）                                                                                                                     |
 
 ## 限界

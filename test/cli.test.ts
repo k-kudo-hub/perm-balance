@@ -152,3 +152,40 @@ describe("user-wide settings", () => {
 		expect(out.split("in each project's own settings").length - 1).toBe(1);
 	});
 });
+
+describe("cli with Codex project trust", () => {
+	function runWithHome(userToml: (root: string) => string) {
+		const root = makeDir({
+			".codex/config.toml": 'sandbox_mode = "danger-full-access"\n',
+		});
+		const home = makeDir({ ".codex/config.toml": userToml(root) });
+		let out = "";
+		const code = main(["--user"], {
+			cwd: root,
+			home,
+			stdout: (s) => {
+				out += s;
+			},
+			stderr: () => {},
+		});
+		return { code, out };
+	}
+
+	it("says an untrusted project's Codex settings are not checked, and exits with code 0", () => {
+		const { code, out } = runWithHome(
+			(root) => `[projects."${root}"]\ntrust_level = "untrusted"\n`,
+		);
+		expect(out).toContain("Not checked: Codex does not load this file");
+		expect(out).not.toContain("danger-full-access");
+		const projectSection = out.split("━━ ")[1] ?? "";
+		expect(projectSection).not.toContain("No findings");
+		expect(code).toBe(0);
+	});
+
+	it("notes that a project with no saved trust takes effect only after trusting", () => {
+		const { code, out } = runWithHome(() => "");
+		expect(out).toContain("Note: Codex loads this file only after you trust");
+		expect(out).toContain("danger-full-access");
+		expect(code).toBe(1);
+	});
+});
