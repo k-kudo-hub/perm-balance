@@ -256,6 +256,67 @@ describe("user-wide sandbox_mode with a project permission profile", () => {
 		expect(ignored(project)).toHaveLength(1);
 	});
 
+	it("never gives the new profiles proposed for the two files the same name, since Codex would merge them", () => {
+		const { root, home, user, project } = scanBoth(
+			'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nwritable_roots = ["/opt/cache"]\n',
+			'default_permissions = ":read-only"\n',
+			{ ".env": "" },
+		);
+		writeFileSync(join(home, USER_CODEX), user?.proposal ?? "");
+		writeFileSync(join(root, PROJECT_CODEX), project?.proposal ?? "");
+		const userConfig = parse(user?.proposal ?? "");
+		const projectConfig = parse(project?.proposal ?? "");
+		const projectProfile = String(projectConfig.default_permissions);
+		expect(Object.keys(projectConfig.permissions ?? {})).toEqual([
+			projectProfile,
+		]);
+		expect(Object.keys(userConfig.permissions ?? {})).not.toContain(
+			projectProfile,
+		);
+	});
+
+	it("removing both the user's sandbox_mode and the broader project profile never widens the project", () => {
+		const { root, home, user, project } = scanBoth(
+			'sandbox_mode = "workspace-write"\ndefault_permissions = ":read-only"\n',
+			'default_permissions = ":danger-full-access"\n',
+		);
+		expect(ignored(project)[0]?.riskReason).toContain(
+			"without also removing this",
+		);
+		writeFileSync(join(home, USER_CODEX), user?.proposal ?? "");
+		writeFileSync(join(root, PROJECT_CODEX), project?.proposal ?? "");
+		expect(parse(user?.proposal ?? "").default_permissions).toBe(":read-only");
+		expect(parse(project?.proposal ?? "").default_permissions).toBeUndefined();
+	});
+
+	it("recommends no profile when the project has none, since the user's sandbox_mode would make it ignored", () => {
+		const { project } = scanBoth('sandbox_mode = "workspace-write"\n', "", {
+			".env": "",
+		});
+		expect(project?.findings).toEqual([]);
+		expect(project?.recommendations).toEqual([]);
+	});
+
+	it("checks the project's [sandbox_workspace_write] that applies with the user's sandbox_mode", () => {
+		const { project } = scanBoth(
+			'sandbox_mode = "workspace-write"\n',
+			'[sandbox_workspace_write]\nwritable_roots = ["~"]\n',
+		);
+		expect(project?.findings.map((f) => f.ruleId)).toEqual([
+			"codex/legacy-write-home",
+		]);
+	});
+
+	it("explains that the replacement narrows other projects when it cannot give the same access", () => {
+		const { user } = scanBoth(
+			'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n',
+			'default_permissions = ":read-only"\n',
+		);
+		const finding = ignored(user)[0];
+		expect(finding?.suggestion?.summary).not.toContain("same access");
+		expect(finding?.convenienceReason).not.toContain("same access");
+	});
+
 	it("does not flag the combination without --user", () => {
 		const root = makeDir({
 			[PROJECT_CODEX]: 'default_permissions = ":read-only"\n',

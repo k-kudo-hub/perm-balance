@@ -193,19 +193,21 @@ function enableProxy(config: unknown): Patch {
 /**
  * Name for a new profile that does not collide with an existing one. Profiles with the same name in the other
  * config layer merge into one ("Higher-precedence layers can add or replace entries under the same profile name"),
- * so names used there are avoided too
+ * so names used there are avoided too, and proposals for user-wide and project files start from different names
+ * so that applying both never merges two new profiles
  */
 function newProfileName(config: unknown, ctx: RuleContext): string {
+	const base = ctx.scope === "user" ? "user" : "project";
 	const taken = new Set([
 		...Object.keys(customProfiles(config)),
 		...Object.keys(customProfiles(ctx.codexLayer?.config)),
 	]);
-	for (const name of ["project", "project-narrow"]) {
+	for (const name of [base, `${base}-narrow`]) {
 		if (!taken.has(name)) return name;
 	}
 	let i = 2;
-	while (taken.has(`project-narrow-${i}`)) i++;
-	return `project-narrow-${i}`;
+	while (taken.has(`${base}-narrow-${i}`)) i++;
+	return `${base}-narrow-${i}`;
 }
 
 /** Merges config layers: tables merge key by key, and the higher layer's other values replace the lower layer's */
@@ -240,7 +242,7 @@ function replaceSandboxMode(
 	config: unknown,
 	ctx: RuleContext,
 	sandboxMode: string,
-): Patch[] {
+): { sameAccess: boolean; patches: Patch[] } {
 	const legacy = get(config, ["sandbox_workspace_write"]);
 	const builtin =
 		sandboxMode === "read-only"
@@ -250,12 +252,16 @@ function replaceSandboxMode(
 					get(legacy, ["network_access"]) !== true
 				? ":workspace"
 				: undefined;
-	if (builtin === undefined) return migrateToProfile(config, ctx);
-	return [
-		{ op: "delete", path: ["sandbox_mode"] },
-		{ op: "delete", path: ["sandbox_workspace_write"] },
-		{ op: "set", path: ["default_permissions"], value: builtin },
-	];
+	if (builtin === undefined)
+		return { sameAccess: false, patches: migrateToProfile(config, ctx) };
+	return {
+		sameAccess: true,
+		patches: [
+			{ op: "delete", path: ["sandbox_mode"] },
+			{ op: "delete", path: ["sandbox_workspace_write"] },
+			{ op: "set", path: ["default_permissions"], value: builtin },
+		],
+	};
 }
 
 /**
@@ -605,7 +611,11 @@ function checkAcrossLayers(
 	config: unknown,
 	ctx: RuleContext,
 	dp: string | undefined,
-): { assessments: Assessment[]; legacyFromUser: boolean } {
+): {
+	assessments: Assessment[];
+	legacyFromUser: boolean;
+	userMode?: string;
+} {
 	const none = { assessments: [], legacyFromUser: false };
 	if (ctx.codexLayer === undefined) return none;
 	const isUser = ctx.scope === "user";
@@ -620,7 +630,7 @@ function checkAcrossLayers(
 	const projectDp = get(project, ["default_permissions"]);
 	if (typeof projectDp !== "string") {
 		// The project has no profile; one added there would be ignored too
-		return { assessments: [], legacyFromUser: !isUser };
+		return { assessments: [], legacyFromUser: !isUser, userMode };
 	}
 	const merged = mergeLayers(user, project);
 	const profileWider = profileWiderThanLegacy(merged, projectDp, userMode);
@@ -631,12 +641,13 @@ function checkAcrossLayers(
 		if (!profileWider) return none;
 		return {
 			legacyFromUser: true,
+			userMode,
 			assessments: [
 				{
 					ruleId: "codex/profile-ignored",
 					setting: `default_permissions = "${projectDp}" (ignored because ${userFile} sets sandbox_mode = "${userMode}")`,
 					risk: "medium",
-					riskReason: `sandbox_mode in ${userFile} is what applies, and this unused default_permissions is broader. Removing that sandbox_mode would widen permissions`,
+					riskReason: `sandbox_mode in ${userFile} is what applies, and this unused default_permissions is broader. If that sandbox_mode is removed without also removing this, this profile applies and permissions widen`,
 					convenience: "low",
 					convenienceReason: "Keeping an unused setting gains nothing",
 					suggestion: {
@@ -653,6 +664,7 @@ function checkAcrossLayers(
 	// single-file check removes it for being broader than sandbox_mode
 	const ownDp =
 		typeof dp === "string" && !profileWiderThanLegacy(config, dp, userMode);
+	const replacement = replaceSandboxMode(config, ctx, userMode);
 	return {
 		legacyFromUser: false,
 		assessments: [
@@ -664,17 +676,21 @@ function checkAcrossLayers(
 				convenience: "low",
 				convenienceReason: ownDp
 					? "Your own default_permissions applies to other projects without sandbox_mode, so keeping it gains nothing"
-					: "A permission profile gives other projects the same access, so keeping sandbox_mode gains nothing",
+					: replacement.sameAccess
+						? "The matching built-in profile gives other projects the same access, so keeping sandbox_mode gains nothing"
+						: "A profile built on :workspace keeps other projects' workspace writes, so keeping sandbox_mode gains little",
 				suggestion: {
 					summary: ownDp
 						? `Remove sandbox_mode so ${projectFile}'s profile applies to that project`
-						: `Replace sandbox_mode with the matching default_permissions so other projects keep their access and ${projectFile}'s profile applies to that project`,
+						: replacement.sameAccess
+							? `Replace sandbox_mode with the matching built-in default_permissions so other projects keep the same access and ${projectFile}'s profile applies to that project`
+							: `Move to a profile built on :workspace (network off unless allowed per project) so ${projectFile}'s profile applies to that project`,
 					patches: ownDp
 						? [
 								{ op: "delete", path: ["sandbox_mode"] },
 								{ op: "delete", path: ["sandbox_workspace_write"] },
 							]
-						: replaceSandboxMode(config, ctx, userMode),
+						: replacement.patches,
 				},
 			},
 		],
@@ -738,9 +754,12 @@ export function checkCodexConfig(
 	if (layer.legacyFromUser) legacyEffective = true;
 
 	if (legacyEffective) {
-		// Legacy settings in the user's file are checked in that file's report
 		if (!layer.legacyFromUser)
 			assessments.push(...checkLegacy(config, ctx, sandboxMode));
+		// The user's sandbox_mode applies with this file's [sandbox_workspace_write]. sandbox_mode itself is
+		// checked in the user's report
+		else if (layer.userMode === "workspace-write")
+			assessments.push(...checkLegacy(config, ctx, layer.userMode));
 	} else if (dp === ":danger-full-access") {
 		assessments.push(
 			fullAccess(
