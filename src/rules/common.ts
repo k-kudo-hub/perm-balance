@@ -14,6 +14,17 @@ export interface RuleContext {
 	file: string;
 	scope: Scope;
 	facts: ProjectFacts;
+	/**
+	 * The other Codex config layer read together with this file: the user's ~/.codex/config.toml for the project's
+	 * .codex/config.toml, and the reverse. Codex loads both, so a key in one can change what the other means
+	 */
+	codexLayer?: CodexLayer;
+}
+
+export interface CodexLayer {
+	config: unknown;
+	/** File path for display */
+	file: string;
 }
 
 export interface RuleResult {
