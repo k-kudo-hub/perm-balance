@@ -88,8 +88,41 @@ function displayPath(path: string, opts: ScanOptions): string {
 
 export function scan(opts: ScanOptions): FileReport[] {
 	const facts = readProjectFacts(opts.root);
-	return discover(opts).map((target) => {
+	const parsed = discover(opts).map((target) => {
 		const file = displayPath(target.path, opts);
+		try {
+			const text = readFileSync(target.path, "utf8");
+			const config: unknown =
+				target.agent === "codex" ? parse(text) : JSON.parse(text);
+			return { target, file, config };
+		} catch (e) {
+			return {
+				target,
+				file,
+				error: e instanceof Error ? e.message : String(e),
+			};
+		}
+	});
+
+	// Codex loads ~/.codex/config.toml and the project's .codex/config.toml as layers of one config
+	const layerAt = (path: string) => {
+		const p = parsed.find(
+			(x) => x.target.path === path && x.target.agent === "codex",
+		);
+		return p && p.error === undefined
+			? { config: p.config, file: p.file }
+			: undefined;
+	};
+	const userLayer = layerAt(join(opts.home, ".codex/config.toml"));
+	const projectLayer = layerAt(join(opts.root, ".codex/config.toml"));
+	const otherLayer = (path: string) =>
+		path === join(opts.home, ".codex/config.toml")
+			? projectLayer
+			: path === join(opts.root, ".codex/config.toml")
+				? userLayer
+				: undefined;
+
+	return parsed.map(({ target, file, config, error }) => {
 		const base = {
 			file,
 			agent: target.agent,
@@ -97,17 +130,13 @@ export function scan(opts: ScanOptions): FileReport[] {
 			findings: [],
 			recommendations: [],
 		};
-		let config: unknown;
-		try {
-			const text = readFileSync(target.path, "utf8");
-			config = target.agent === "codex" ? parse(text) : JSON.parse(text);
-		} catch (e) {
-			return { ...base, error: e instanceof Error ? e.message : String(e) };
-		}
+		if (error !== undefined) return { ...base, error };
 		const ctx = {
 			file,
 			scope: target.scope,
 			facts: target.scope === "user" ? emptyFacts(opts.root) : facts,
+			codexLayer:
+				userLayer && projectLayer ? otherLayer(target.path) : undefined,
 		};
 		const result: RuleResult =
 			target.agent === "codex"

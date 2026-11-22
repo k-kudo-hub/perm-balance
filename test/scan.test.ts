@@ -206,13 +206,19 @@ describe("user-wide sandbox_mode with a project permission profile", () => {
 			'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nwritable_roots = ["/opt/cache"]\n',
 			'default_permissions = "project"\n[permissions.project]\nextends = ":read-only"\n',
 		);
-		const proposed = parse(user?.proposal ?? "") as Record<string, any>;
+		const proposed = parse(user?.proposal ?? "");
 		expect(proposed.sandbox_mode).toBeUndefined();
 		expect(proposed.sandbox_workspace_write).toBeUndefined();
 		expect(proposed.default_permissions).not.toBe("project");
-		const name = proposed.default_permissions as string;
-		expect(proposed.permissions[name].extends).toBe(":workspace");
-		expect(proposed.permissions[name].filesystem["/opt/cache"]).toBe("write");
+		const name = String(proposed.default_permissions);
+		expect(proposed).toMatchObject({
+			permissions: {
+				[name]: {
+					extends: ":workspace",
+					filesystem: { "/opt/cache": "write" },
+				},
+			},
+		});
 	});
 
 	it("keeps the user's own default_permissions when it is what applies after removing sandbox_mode", () => {
@@ -239,6 +245,15 @@ describe("user-wide sandbox_mode with a project permission profile", () => {
 		expect(proposed.default_permissions).toBeUndefined();
 		// A profile would be ignored while the user's sandbox_mode stays, so no profile is recommended
 		expect(project?.recommendations).toEqual([]);
+	});
+
+	it("reads a profile defined in the user's file when comparing breadth", () => {
+		const { user, project } = scanBoth(
+			'sandbox_mode = "workspace-write"\n[permissions.dev.filesystem]\n"~" = "write"\n',
+			'default_permissions = "dev"\n',
+		);
+		expect(ignored(user)).toEqual([]);
+		expect(ignored(project)).toHaveLength(1);
 	});
 
 	it("does not flag the combination without --user", () => {

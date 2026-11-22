@@ -190,9 +190,72 @@ function enableProxy(config: unknown): Patch {
 		: { op: "set", path: ["features", "network_proxy"], value: true };
 }
 
-/** Name for a new profile that does not collide with an existing one */
-function newProfileName(config: unknown): string {
-	return "project" in customProfiles(config) ? "project-narrow" : "project";
+/**
+ * Name for a new profile that does not collide with an existing one. Profiles with the same name in the other
+ * config layer merge into one ("Higher-precedence layers can add or replace entries under the same profile name"),
+ * so names used there are avoided too
+ */
+function newProfileName(config: unknown, ctx: RuleContext): string {
+	const taken = new Set([
+		...Object.keys(customProfiles(config)),
+		...Object.keys(customProfiles(ctx.codexLayer?.config)),
+	]);
+	for (const name of ["project", "project-narrow"]) {
+		if (!taken.has(name)) return name;
+	}
+	let i = 2;
+	while (taken.has(`project-narrow-${i}`)) i++;
+	return `project-narrow-${i}`;
+}
+
+/** Merges config layers: tables merge key by key, and the higher layer's other values replace the lower layer's */
+function mergeLayers(lower: unknown, higher: unknown): unknown {
+	if (!isObj(lower) || !isObj(higher))
+		return higher === undefined ? lower : higher;
+	const merged: Record<string, unknown> = { ...lower };
+	for (const [key, value] of Object.entries(higher))
+		merged[key] = mergeLayers(lower[key], value);
+	return merged;
+}
+
+/** Whether a profile is broader than the legacy sandbox_mode in writes or in network access */
+function profileWiderThanLegacy(
+	config: unknown,
+	profile: string,
+	sandboxMode: string,
+): boolean {
+	return (
+		profileRank(config, profile) > (SANDBOX_MODE_RANK[sandboxMode] ?? 1) ||
+		(profileNetwork(config, profile) && !legacyNetwork(config, sandboxMode))
+	);
+}
+
+/**
+ * Patches that replace the legacy sandbox_mode with the matching permission profile, following the docs' starting
+ * points ("For a read-only workflow, use the built-in :read-only profile", "For workspace editing, use the built-in
+ * :workspace profile"). Legacy settings with extra writable roots or network access, and danger-full-access, move to
+ * a profile built on :workspace, like the other legacy findings propose
+ */
+function replaceSandboxMode(
+	config: unknown,
+	ctx: RuleContext,
+	sandboxMode: string,
+): Patch[] {
+	const legacy = get(config, ["sandbox_workspace_write"]);
+	const builtin =
+		sandboxMode === "read-only"
+			? ":read-only"
+			: sandboxMode === "workspace-write" &&
+					stringArray(get(legacy, ["writable_roots"])).length === 0 &&
+					get(legacy, ["network_access"]) !== true
+				? ":workspace"
+				: undefined;
+	if (builtin === undefined) return migrateToProfile(config, ctx);
+	return [
+		{ op: "delete", path: ["sandbox_mode"] },
+		{ op: "delete", path: ["sandbox_workspace_write"] },
+		{ op: "set", path: ["default_permissions"], value: builtin },
+	];
 }
 
 /**
@@ -230,7 +293,7 @@ function narrowNetwork(
 
 /** Patches that move from no sandbox or legacy settings to a profile that can write only the workspace and reach only allowed domains */
 function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
-	const name = newProfileName(config);
+	const name = newProfileName(config, ctx);
 	const roots = stringArray(
 		get(config, ["sandbox_workspace_write", "writable_roots"]),
 	).filter((p) => !isHomeOrRoot(p));
@@ -530,6 +593,94 @@ function fullAccess(
 	};
 }
 
+/**
+ * The user's sandbox_mode and the project's default_permissions, read as layers of one config.
+ * "If sandbox_mode appears in any loaded config file ... Codex uses those older sandbox settings instead of
+ * default_permissions", so a sandbox_mode in ~/.codex/config.toml disables the project's profile. As in the
+ * single-file check, the broader one is removed so the narrower one applies: the user's sandbox_mode (replaced with
+ * the matching profile, so other projects keep the same access) or the project's unused default_permissions.
+ * A project that sets sandbox_mode itself is left to the single-file check
+ */
+function checkAcrossLayers(
+	config: unknown,
+	ctx: RuleContext,
+	dp: string | undefined,
+): { assessments: Assessment[]; legacyFromUser: boolean } {
+	const none = { assessments: [], legacyFromUser: false };
+	if (ctx.codexLayer === undefined) return none;
+	const isUser = ctx.scope === "user";
+	const user = isUser ? config : ctx.codexLayer.config;
+	const project = isUser ? ctx.codexLayer.config : config;
+	const userMode = get(user, ["sandbox_mode"]);
+	if (
+		typeof userMode !== "string" ||
+		get(project, ["sandbox_mode"]) !== undefined
+	)
+		return none;
+	const projectDp = get(project, ["default_permissions"]);
+	if (typeof projectDp !== "string") {
+		// The project has no profile; one added there would be ignored too
+		return { assessments: [], legacyFromUser: !isUser };
+	}
+	const merged = mergeLayers(user, project);
+	const profileWider = profileWiderThanLegacy(merged, projectDp, userMode);
+	const userFile = isUser ? ctx.file : ctx.codexLayer.file;
+	const projectFile = isUser ? ctx.codexLayer.file : ctx.file;
+
+	if (!isUser) {
+		if (!profileWider) return none;
+		return {
+			legacyFromUser: true,
+			assessments: [
+				{
+					ruleId: "codex/profile-ignored",
+					setting: `default_permissions = "${projectDp}" (ignored because ${userFile} sets sandbox_mode = "${userMode}")`,
+					risk: "medium",
+					riskReason: `sandbox_mode in ${userFile} is what applies, and this unused default_permissions is broader. Removing that sandbox_mode would widen permissions`,
+					convenience: "low",
+					convenienceReason: "Keeping an unused setting gains nothing",
+					suggestion: {
+						summary: "Remove the unused default_permissions",
+						patches: [{ op: "delete", path: ["default_permissions"] }],
+					},
+				},
+			],
+		};
+	}
+
+	if (profileWider) return none;
+	// The user's own default_permissions applies to other projects once sandbox_mode is gone, unless the
+	// single-file check removes it for being broader than sandbox_mode
+	const ownDp =
+		typeof dp === "string" && !profileWiderThanLegacy(config, dp, userMode);
+	return {
+		legacyFromUser: false,
+		assessments: [
+			{
+				ruleId: "codex/profile-ignored",
+				setting: `sandbox_mode = "${userMode}" (makes Codex ignore default_permissions = "${projectDp}" in ${projectFile})`,
+				risk: "medium",
+				riskReason: `sandbox_mode in any loaded config file makes Codex use the legacy sandbox settings instead of default_permissions, so the restrictions ${projectFile} writes in its profile are not in effect`,
+				convenience: "low",
+				convenienceReason: ownDp
+					? "Your own default_permissions applies to other projects without sandbox_mode, so keeping it gains nothing"
+					: "A permission profile gives other projects the same access, so keeping sandbox_mode gains nothing",
+				suggestion: {
+					summary: ownDp
+						? `Remove sandbox_mode so ${projectFile}'s profile applies to that project`
+						: `Replace sandbox_mode with the matching default_permissions so other projects keep their access and ${projectFile}'s profile applies to that project`,
+					patches: ownDp
+						? [
+								{ op: "delete", path: ["sandbox_mode"] },
+								{ op: "delete", path: ["sandbox_workspace_write"] },
+							]
+						: replaceSandboxMode(config, ctx, userMode),
+				},
+			},
+		],
+	};
+}
+
 export function checkCodexConfig(
 	config: unknown,
 	ctx: RuleContext,
@@ -544,9 +695,7 @@ export function checkCodexConfig(
 	let legacyEffective = sandboxMode !== undefined;
 	if (dp !== undefined && typeof sandboxMode === "string") {
 		// If the profile is broader in either writes or network access, remove the profile
-		const profileWider =
-			profileRank(config, dp) > (SANDBOX_MODE_RANK[sandboxMode] ?? 1) ||
-			(profileNetwork(config, dp) && !legacyNetwork(config, sandboxMode));
+		const profileWider = profileWiderThanLegacy(config, dp, sandboxMode);
 		legacyEffective = profileWider;
 		const setting = `default_permissions = "${dp}" and sandbox_mode = "${sandboxMode}"`;
 		assessments.push(
@@ -584,8 +733,14 @@ export function checkCodexConfig(
 		);
 	}
 
+	const layer = checkAcrossLayers(config, ctx, dp);
+	assessments.push(...layer.assessments);
+	if (layer.legacyFromUser) legacyEffective = true;
+
 	if (legacyEffective) {
-		assessments.push(...checkLegacy(config, ctx, sandboxMode));
+		// Legacy settings in the user's file are checked in that file's report
+		if (!layer.legacyFromUser)
+			assessments.push(...checkLegacy(config, ctx, sandboxMode));
 	} else if (dp === ":danger-full-access") {
 		assessments.push(
 			fullAccess(
@@ -620,7 +775,7 @@ export function checkCodexConfig(
 		globs.length > 0
 	) {
 		const useActive = dp !== undefined && BUILTIN_RANK[dp] === undefined;
-		const name = useActive ? dp : newProfileName(config);
+		const name = useActive ? dp : newProfileName(config, ctx);
 		const rootsPath = ["permissions", name, "filesystem", ":workspace_roots"];
 		const existing = useActive ? get(config, rootsPath) : undefined;
 		const missing = globs.filter(
