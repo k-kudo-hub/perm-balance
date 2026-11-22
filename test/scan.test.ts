@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parse } from "smol-toml";
 import { describe, expect, it } from "vitest";
 import { scan } from "../src/scan.js";
+import type { FileReport } from "../src/types.js";
 
 function makeDir(files: Record<string, string>): string {
 	const root = mkdtempSync(join(tmpdir(), "perm-balance-scan-"));
@@ -156,6 +157,133 @@ describe("re-checking the proposal", () => {
 		for (const report of second) {
 			expect(report.findings.filter((f) => f.verdict !== "keep")).toEqual([]);
 			expect(report.recommendations).toEqual([]);
+		}
+	});
+});
+
+describe("user-wide sandbox_mode with a project permission profile", () => {
+	const USER_CODEX = ".codex/config.toml";
+	const PROJECT_CODEX = ".codex/config.toml";
+
+	function scanBoth(userToml: string, projectToml: string, extra = {}) {
+		const root = makeDir({ [PROJECT_CODEX]: projectToml, ...extra });
+		const home = makeDir({ [USER_CODEX]: userToml });
+		const reports = scan({ root, home, includeUser: true, files: [] });
+		const project = reports.find((r) => r.scope === "project");
+		const user = reports.find((r) => r.scope === "user");
+		return { root, home, project, user };
+	}
+
+	const ignored = (r?: FileReport) =>
+		r?.findings.filter((f) => f.ruleId === "codex/profile-ignored") ?? [];
+
+	it("flags the user's sandbox_mode when it disables a narrower project profile, and replaces it with the matching built-in profile", () => {
+		const { user, project } = scanBoth(
+			'sandbox_mode = "workspace-write"\n',
+			'default_permissions = "proj"\n[permissions.proj]\nextends = ":read-only"\n',
+		);
+		const [finding] = ignored(user);
+		expect(finding?.verdict).toBe("reject");
+		expect(finding?.setting).toContain('sandbox_mode = "workspace-write"');
+		expect(finding?.setting).toContain(".codex/config.toml");
+		const proposed = parse(user?.proposal ?? "");
+		expect(proposed.sandbox_mode).toBeUndefined();
+		expect(proposed.default_permissions).toBe(":workspace");
+		expect(ignored(project)).toEqual([]);
+	});
+
+	it("maps read-only to :read-only", () => {
+		const { user } = scanBoth(
+			'sandbox_mode = "read-only"\n',
+			'default_permissions = ":read-only"\n',
+		);
+		expect(ignored(user)).toHaveLength(1);
+		expect(parse(user?.proposal ?? "").default_permissions).toBe(":read-only");
+	});
+
+	it("keeps the extra writable roots of the legacy settings in a profile that does not collide with the project's profiles", () => {
+		const { user } = scanBoth(
+			'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nwritable_roots = ["/opt/cache"]\n',
+			'default_permissions = "project"\n[permissions.project]\nextends = ":read-only"\n',
+		);
+		const proposed = parse(user?.proposal ?? "") as Record<string, any>;
+		expect(proposed.sandbox_mode).toBeUndefined();
+		expect(proposed.sandbox_workspace_write).toBeUndefined();
+		expect(proposed.default_permissions).not.toBe("project");
+		const name = proposed.default_permissions as string;
+		expect(proposed.permissions[name].extends).toBe(":workspace");
+		expect(proposed.permissions[name].filesystem["/opt/cache"]).toBe("write");
+	});
+
+	it("keeps the user's own default_permissions when it is what applies after removing sandbox_mode", () => {
+		const { user } = scanBoth(
+			'sandbox_mode = "workspace-write"\ndefault_permissions = ":read-only"\n',
+			'default_permissions = ":read-only"\n',
+		);
+		const proposed = parse(user?.proposal ?? "");
+		expect(proposed.sandbox_mode).toBeUndefined();
+		expect(proposed.default_permissions).toBe(":read-only");
+	});
+
+	it("flags the unused project profile instead when it is broader than the user's sandbox_mode", () => {
+		const { user, project } = scanBoth(
+			'sandbox_mode = "read-only"\n',
+			'default_permissions = ":workspace"\n',
+			{ ".env": "" },
+		);
+		expect(ignored(user)).toEqual([]);
+		const [finding] = ignored(project);
+		expect(finding?.verdict).toBe("reject");
+		expect(finding?.setting).toContain("~/.codex/config.toml");
+		const proposed = parse(project?.proposal ?? "");
+		expect(proposed.default_permissions).toBeUndefined();
+		// A profile would be ignored while the user's sandbox_mode stays, so no profile is recommended
+		expect(project?.recommendations).toEqual([]);
+	});
+
+	it("does not flag the combination without --user", () => {
+		const root = makeDir({
+			[PROJECT_CODEX]: 'default_permissions = ":read-only"\n',
+		});
+		const home = makeDir({
+			[USER_CODEX]: 'sandbox_mode = "workspace-write"\n',
+		});
+		const reports = scan({ root, home, includeUser: false, files: [] });
+		expect(reports.flatMap((r) => r.findings)).toEqual([]);
+	});
+
+	it("leaves it to the single-file check when the project sets sandbox_mode itself", () => {
+		const { user, project } = scanBoth(
+			'sandbox_mode = "workspace-write"\n',
+			'sandbox_mode = "read-only"\ndefault_permissions = ":read-only"\n',
+		);
+		expect(ignored(user)).toEqual([]);
+		expect(ignored(project)).toHaveLength(1);
+	});
+
+	it("re-checking after applying both proposals yields no reject or narrow findings", () => {
+		for (const [userToml, projectToml] of [
+			[
+				'sandbox_mode = "workspace-write"\n',
+				'default_permissions = "proj"\n[permissions.proj]\nextends = ":workspace"\n[permissions.proj.network]\nenabled = false\n',
+			],
+			['sandbox_mode = "read-only"\n', 'default_permissions = ":workspace"\n'],
+			[
+				'sandbox_mode = "danger-full-access"\n',
+				'default_permissions = ":read-only"\n',
+			],
+		] as const) {
+			const { root, home, user, project } = scanBoth(userToml, projectToml, {
+				".env": "",
+			});
+			if (user?.proposal) writeFileSync(join(home, USER_CODEX), user.proposal);
+			if (project?.proposal)
+				writeFileSync(join(root, PROJECT_CODEX), project.proposal);
+			const second = scan({ root, home, includeUser: true, files: [] });
+			for (const report of second) {
+				expect(report.findings.filter((f) => f.verdict !== "keep")).toEqual([]);
+				expect(report.recommendations).toEqual([]);
+			}
 		}
 	});
 });
