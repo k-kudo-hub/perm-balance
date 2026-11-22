@@ -59,15 +59,26 @@ function projectRoot(dir: string, markers: string[]): string | undefined {
 	return undefined;
 }
 
-function readGitdirFile(dotGit: string): string | undefined {
+/** Codex reads git metadata files only when they are regular files of at most 64 KiB (MAX_GIT_METADATA_FILE_BYTES) */
+const MAX_GIT_METADATA_FILE_BYTES = 64 * 1024;
+
+function readMetadataFile(path: string): string | undefined {
 	try {
-		const stat = lstatSync(dotGit);
-		if (!stat.isFile()) return undefined;
-		const match = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf8"));
-		return match?.[1] ? resolve(dirname(dotGit), match[1]) : undefined;
+		const stat = lstatSync(path);
+		if (!stat.isFile() || stat.size > MAX_GIT_METADATA_FILE_BYTES)
+			return undefined;
+		return readFileSync(path, "utf8").trim();
 	} catch {
 		return undefined;
 	}
+}
+
+function readGitdirFile(dotGit: string): string | undefined {
+	const contents = readMetadataFile(dotGit);
+	if (contents === undefined || !contents.startsWith("gitdir:"))
+		return undefined;
+	const target = contents.slice("gitdir:".length).trim();
+	return target === "" ? undefined : resolve(dirname(dotGit), target);
 }
 
 /**
@@ -93,6 +104,17 @@ function repoRootForTrust(dir: string): string | undefined {
 		const canonicalGitDir = realpathSync(gitDir);
 		if (basename(dirname(canonicalGitDir)) !== "worktrees") return undefined;
 		const commonDir = dirname(dirname(canonicalGitDir));
+		// The worktree must be the one registered for this git dir, sharing its common dir
+		const registeredDotGit = readMetadataFile(join(canonicalGitDir, "gitdir"));
+		const commondir = readMetadataFile(join(canonicalGitDir, "commondir"));
+		if (!registeredDotGit || !commondir) return undefined;
+		const registered = resolve(canonicalGitDir, registeredDotGit);
+		if (basename(registered) !== ".git") return undefined;
+		if (
+			realpathSync(dirname(registered)) !== realpathSync(root) ||
+			realpathSync(resolve(canonicalGitDir, commondir)) !== commonDir
+		)
+			return undefined;
 		const mainRoot = dirname(dirname(dirname(gitDir)));
 		const mainDotGit = join(mainRoot, ".git");
 		const mainGitDir = isDirectory(mainDotGit)
@@ -117,27 +139,31 @@ function savedLevels(userConfig: unknown): Map<string, TrustLevel> {
 	return levels;
 }
 
-function markersOf(userConfig: unknown): string[] {
+/** undefined when the value is invalid: Codex then fails to load the config, so no trust is decided */
+function markersOf(userConfig: unknown): string[] | undefined {
 	const markers = isRecord(userConfig)
 		? userConfig.project_root_markers
 		: undefined;
+	if (markers === undefined) return DEFAULT_PROJECT_ROOT_MARKERS;
 	return Array.isArray(markers) &&
 		markers.every((m): m is string => typeof m === "string")
 		? markers
-		: DEFAULT_PROJECT_ROOT_MARKERS;
+		: undefined;
 }
 
 /**
  * Whether Codex trusts the project whose .codex/ layer is in `dir`, read from the user's ~/.codex/config.toml.
  * Follows Codex's decision_for_dir: the directory itself, then the project root, then the git repository root
  * (the main checkout for a linked worktree). The first saved decision wins.
+ * undefined when the config is one Codex refuses to load (an invalid project_root_markers).
  */
 export function codexProjectTrust(
 	userConfig: unknown,
 	dir: string,
-): CodexTrust {
+): CodexTrust | undefined {
 	const levels = savedLevels(userConfig);
 	const markers = markersOf(userConfig);
+	if (markers === undefined) return undefined;
 	const project = markers.length > 0 ? (projectRoot(dir, markers) ?? dir) : dir;
 	const repo = repoRootForTrust(dir);
 	const projectKeys = lookupKeys(project);

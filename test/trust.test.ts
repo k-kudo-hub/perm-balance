@@ -88,9 +88,10 @@ describe("codexProjectTrust", () => {
 			key: root,
 		});
 		// Without the marker, package.json does not make a project root
-		expect(
-			codexProjectTrust(projects({ [root]: "untrusted" }), dir).level,
-		).toBeUndefined();
+		expect(codexProjectTrust(projects({ [root]: "untrusted" }), dir)).toEqual({
+			level: undefined,
+			key: dir,
+		});
 	});
 
 	it("falls back to the main checkout for a linked git worktree", () => {
@@ -130,10 +131,56 @@ describe("codexProjectTrust", () => {
 			codexProjectTrust(
 				{ projects: { [root]: { trust_level: "maybe" } } },
 				root,
-			).level,
-		).toBeUndefined();
+			),
+		).toEqual({ level: undefined, key: root });
 		expect(
-			codexProjectTrust({ projects: { [root]: "trusted" } }, root).level,
+			codexProjectTrust({ projects: { [root]: "trusted" } }, root),
+		).toEqual({ level: undefined, key: root });
+	});
+});
+
+describe("codexProjectTrust edge cases", () => {
+	function linkedWorktree() {
+		const main = makeDir({ ".git/HEAD": "ref: refs/heads/main\n" });
+		const wt = makeDir({});
+		const gitDir = join(main, ".git/worktrees/wt");
+		mkdirSync(gitDir, { recursive: true });
+		writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/wt\n");
+		writeFileSync(join(gitDir, "commondir"), "../..\n");
+		writeFileSync(join(gitDir, "gitdir"), `${join(wt, ".git")}\n`);
+		writeFileSync(join(wt, ".git"), `gitdir: ${gitDir}\n`);
+		return { main, wt, gitDir };
+	}
+
+	it("does not fall back to the main checkout for a worktree registered at another path", () => {
+		const { main, wt, gitDir } = linkedWorktree();
+		const moved = makeDir({});
+		writeFileSync(join(moved, ".git"), `gitdir: ${gitDir}\n`);
+		expect(
+			codexProjectTrust(projects({ [main]: "untrusted" }), wt)?.level,
+		).toBe("untrusted");
+		expect(
+			codexProjectTrust(projects({ [main]: "untrusted" }), moved)?.level,
+		).toBeUndefined();
+	});
+
+	it("does not follow a .git file that is a symlink", () => {
+		const { main, gitDir } = linkedWorktree();
+		const other = makeDir({ gitfile: `gitdir: ${gitDir}\n` });
+		const dir = makeDir({});
+		symlinkSync(join(other, "gitfile"), join(dir, ".git"));
+		expect(
+			codexProjectTrust(projects({ [main]: "untrusted" }), dir)?.level,
+		).toBeUndefined();
+	});
+
+	it("decides no trust when project_root_markers is invalid, since Codex refuses that config", () => {
+		const root = makeDir({});
+		expect(
+			codexProjectTrust(
+				{ project_root_markers: ".git", ...projects({ [root]: "untrusted" }) },
+				root,
+			),
 		).toBeUndefined();
 	});
 });

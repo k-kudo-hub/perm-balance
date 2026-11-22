@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { applyPatches } from "./patch.js";
@@ -87,6 +87,15 @@ function displayPath(path: string, opts: ScanOptions): string {
 	return path;
 }
 
+function samePath(a: string, b: string): boolean {
+	if (a === b) return true;
+	try {
+		return realpathSync(a) === realpathSync(b);
+	} catch {
+		return false;
+	}
+}
+
 function notLoadedReason(key: string): string {
 	return `Codex does not load this file: ${key} is marked as untrusted in ~/.codex/config.toml (projects."${key}".trust_level). Its settings take no effect, so they are not checked.`;
 }
@@ -127,9 +136,12 @@ export function scan(opts: ScanOptions): FileReport[] {
 	const userLayer = layerAt(userCodexPath);
 	// Codex loads the project's .codex/ layer only when ~/.codex/config.toml trusts the project.
 	// Trust is known only with --user, and only when that file could be read (or does not exist)
+	// Codex never treats ~/.codex itself as a project layer, so checking the home directory reads no trust
 	const userParsed = parsed.find((x) => x.target.path === userCodexPath);
 	const trust: CodexTrust | undefined =
-		opts.includeUser && userParsed?.error === undefined
+		opts.includeUser &&
+		userParsed?.error === undefined &&
+		!samePath(projectCodexPath, userCodexPath)
 			? codexProjectTrust(userLayer?.config, opts.root)
 			: undefined;
 	const untrusted = trust?.level === "untrusted";
@@ -149,12 +161,15 @@ export function scan(opts: ScanOptions): FileReport[] {
 			findings: [],
 			recommendations: [],
 		};
-		if (error !== undefined) return { ...base, error };
 		const isProjectCodex =
-			target.path === projectCodexPath && target.agent === "codex";
+			target.path === projectCodexPath &&
+			target.agent === "codex" &&
+			target.scope === "project";
+		// Codex does not parse an untrusted layer, so a broken file there is not an error either
 		if (isProjectCodex && trust?.level === "untrusted") {
 			return { ...base, notLoaded: notLoadedReason(trust.key) };
 		}
+		if (error !== undefined) return { ...base, error };
 		const note =
 			isProjectCodex && trust !== undefined && trust.level === undefined
 				? untrustedYetNote(trust.key)

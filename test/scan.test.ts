@@ -466,3 +466,33 @@ describe("Codex project trust", () => {
 		expect(claude?.findings.length).toBeGreaterThan(0);
 	});
 });
+
+describe("Codex project trust edge cases", () => {
+	it("checks ~/.codex/config.toml as user settings when the checked directory is the home directory", () => {
+		const home = makeDir({});
+		mkdirSync(join(home, ".codex"));
+		writeFileSync(
+			join(home, ".codex/config.toml"),
+			`sandbox_mode = "danger-full-access"\n[projects."${home}"]\ntrust_level = "untrusted"\n`,
+		);
+		const reports = scan({ root: home, home, includeUser: true, files: [] });
+		for (const r of reports) {
+			expect(r.notLoaded).toBeUndefined();
+			expect(r.note).toBeUndefined();
+		}
+		const user = reports.find((r) => r.scope === "user");
+		expect(user?.findings.some((f) => f.verdict === "narrow")).toBe(true);
+	});
+
+	it("does not report a broken .codex/config.toml in an untrusted project as unreadable", () => {
+		const root = makeDir({ ".codex/config.toml": "x = [" });
+		const home = makeDir({
+			".codex/config.toml": `[projects."${root}"]\ntrust_level = "untrusted"\n`,
+		});
+		const project = scan({ root, home, includeUser: true, files: [] }).find(
+			(r) => r.scope === "project",
+		);
+		expect(project?.error).toBeUndefined();
+		expect(project?.notLoaded).toContain("untrusted");
+	});
+});
