@@ -228,6 +228,31 @@ function narrowNetwork(
 	];
 }
 
+/**
+ * Patches that replace "*" in [features.network_proxy] domains with this project's destinations, for the legacy settings.
+ * With no candidate domains, turn the legacy network off instead
+ */
+function narrowFeatureDomains(ctx: RuleContext): Patch[] {
+	const base = ["features", "network_proxy", "domains"];
+	const domains = networkDomains(ctx.facts);
+	if (domains.length === 0) {
+		return [
+			{
+				op: "set",
+				path: ["sandbox_workspace_write", "network_access"],
+				value: false,
+			},
+			{ op: "delete", path: [...base, "*"] },
+		];
+	}
+	return [
+		{ op: "delete", path: [...base, "*"] },
+		...domains.map(
+			(d): Patch => ({ op: "set", path: [...base, d], value: "allow" }),
+		),
+	];
+}
+
 /** Patches that move from no sandbox or legacy settings to a profile that can write only the workspace and reach only allowed domains */
 function migrateToProfile(config: unknown, ctx: RuleContext): Patch[] {
 	const name = newProfileName(config);
@@ -463,7 +488,30 @@ function checkLegacy(
 	}
 	const legacy = get(config, ["sandbox_workspace_write"]);
 	if (sandboxMode !== "workspace-write" || !isObj(legacy)) return out;
-	if (legacy.network_access === true) {
+	if (legacy.network_access === true && proxyOn(config)) {
+		// With the proxy on, the legacy network is constrained by [features.network_proxy] domains
+		// (allowlist-first: no allow rule means no external destination). Only "*" opens every public host
+		const featureDomains = get(config, [
+			"features",
+			"network_proxy",
+			"domains",
+		]);
+		if (isObj(featureDomains) && featureDomains["*"] === "allow") {
+			out.push({
+				ruleId: "codex/legacy-network-all",
+				setting:
+					'[features.network_proxy.domains] "*" = "allow" with [sandbox_workspace_write] network_access = true',
+				risk: "high",
+				riskReason: `"*" allows every public host through the proxy. ${NETWORK_RISK}`,
+				convenience: "high",
+				convenienceReason: "Never stops on package downloads or API calls",
+				suggestion: {
+					summary: 'Replace "*" with only the destinations this project uses',
+					patches: narrowFeatureDomains(ctx),
+				},
+			});
+		}
+	} else if (legacy.network_access === true) {
 		out.push({
 			ruleId: "codex/legacy-network-all",
 			setting: "[sandbox_workspace_write] network_access = true",
