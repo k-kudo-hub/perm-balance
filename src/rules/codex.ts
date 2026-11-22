@@ -168,13 +168,24 @@ function profileNetwork(config: unknown, name: string): boolean {
 	return false;
 }
 
-/** Whether the legacy settings allow network access */
+/**
+ * Whether the legacy settings allow network access to every destination.
+ * With the proxy on, legacy traffic is limited to [features.network_proxy] domains, which reach every host only with "*" = "allow"
+ */
 function legacyNetwork(config: unknown, sandboxMode: string): boolean {
 	if (sandboxMode === "danger-full-access") return true;
-	return (
-		sandboxMode === "workspace-write" &&
-		get(config, ["sandbox_workspace_write", "network_access"]) === true
-	);
+	if (
+		sandboxMode !== "workspace-write" ||
+		get(config, ["sandbox_workspace_write", "network_access"]) !== true
+	)
+		return false;
+	return !proxyOn(config) || legacyAllowsAll(config);
+}
+
+/** Whether [features.network_proxy] domains allow every public host */
+function legacyAllowsAll(config: unknown): boolean {
+	const domains = get(config, ["features", "network_proxy", "domains"]);
+	return isObj(domains) && domains["*"] === "allow";
 }
 
 /** Whether the network proxy is started: `[features] network_proxy = true`, or `enabled = true` in the `[features.network_proxy]` table */
@@ -491,12 +502,7 @@ function checkLegacy(
 	if (legacy.network_access === true && proxyOn(config)) {
 		// With the proxy on, the legacy network is constrained by [features.network_proxy] domains
 		// (allowlist-first: no allow rule means no external destination). Only "*" opens every public host
-		const featureDomains = get(config, [
-			"features",
-			"network_proxy",
-			"domains",
-		]);
-		if (isObj(featureDomains) && featureDomains["*"] === "allow") {
+		if (legacyAllowsAll(config)) {
 			out.push({
 				ruleId: "codex/legacy-network-all",
 				setting:
@@ -506,7 +512,8 @@ function checkLegacy(
 				convenience: "high",
 				convenienceReason: "Never stops on package downloads or API calls",
 				suggestion: {
-					summary: 'Replace "*" with only the destinations this project uses',
+					summary:
+						'Replace "*" with only the destinations this project uses (turn the legacy network off if there are none)',
 					patches: narrowFeatureDomains(ctx),
 				},
 			});

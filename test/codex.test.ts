@@ -180,8 +180,42 @@ describe("legacy network access with the feature-level domain policy", () => {
 		});
 	});
 
+	it('narrows "*" written in an inline domains table', () => {
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\ndomains = { "*" = "allow", "example.com" = "deny" }\n`;
+		expect(proposal(toml).features).toEqual({
+			network_proxy: {
+				enabled: true,
+				domains: {
+					"example.com": "deny",
+					"registry.npmjs.org": "allow",
+					"github.com": "allow",
+				},
+			},
+		});
+	});
+
+	it('does not flag "*" = "deny", which is not an allow-all rule', () => {
+		// "global `*` is only valid for allow rules"
+		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\n[features.network_proxy.domains]\n"*" = "deny"\n`;
+		expect(check(toml).findings).toEqual([]);
+	});
+
+	it("keeps the legacy settings when the proxy keeps them narrower than an ignored profile with network", () => {
+		// Removing sandbox_mode would move from no external destination to the profile's github.com
+		const toml = `default_permissions = "dev"\n${LEGACY}[features]\nnetwork_proxy = true\n[permissions.dev]\nextends = ":workspace"\n[permissions.dev.network]\nenabled = true\n[permissions.dev.network.domains]\n"github.com" = "allow"\n`;
+		const { findings } = check(toml);
+		expect(findings.map((f) => f.ruleId)).toEqual(["codex/profile-ignored"]);
+		expect(findings[0]?.suggestion?.patches).toEqual([
+			{ op: "delete", path: ["default_permissions"] },
+		]);
+	});
+
 	it('turns legacy network access off when "*" is allowed and the project has no destinations', () => {
 		const toml = `${LEGACY}[features.network_proxy]\nenabled = true\n[features.network_proxy.domains]\n"*" = "allow"\n`;
+		const none = { languages: [], packageManager: undefined, gitHosts: [] };
+		expect(check(toml, none).findings[0]?.suggestion?.summary).toBe(
+			'Replace "*" with only the destinations this project uses (turn the legacy network off if there are none)',
+		);
 		expect(
 			proposal(toml, {
 				languages: [],
