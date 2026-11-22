@@ -1,6 +1,6 @@
 {
 	"name": "perm-balance",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Check AI agent (Claude Code, Codex) permission settings by balancing risk and convenience",
 	"keywords": [
 		"claude-code",
