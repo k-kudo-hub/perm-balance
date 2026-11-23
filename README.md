@@ -1,21 +1,10 @@
 # perm-balance
 
-English | [日本語](https://github.com/k-kudo-hub/perm-balance/blob/main/README.ja.md)
-
 A CLI that checks the permission settings you give AI agents (Claude Code and Codex) by **balancing risk and convenience**.
 It flags risky settings and prints a narrowed proposal that keeps your work flowing, ready to drop in.
 
-## Why
-
-> 最小権限の原則に従うと、最も小さい範囲から渡していくべきでしょう。
-> しかし結局のところはリスクと利便性のバランスです。リスクが小さく利便性が大きいのであれば、それは許可すべきでしょうし、リスクが大きく利便性が小さいのであればもちろん採用すべきでありません。
-
-(Translation: Following the principle of least privilege, we should start by granting the smallest scope. But in the end, it is a balance between risk and convenience. If the risk is small and the convenience is large, it should be allowed; if the risk is large and the convenience is small, it should of course not be adopted.)
-
 Codex added permission profiles (beta), so you now write in `config.toml` where the agent may write and which hosts it may reach ([Codex permissions](https://developers.openai.com/codex/permissions), [Inside the Codex sandbox](https://openai.com/index/inside-the-codex-sandbox/)). Claude Code likewise takes, in `settings.json`, the commands it may run without asking and the scope of its sandbox ([Claude Code permissions](https://code.claude.com/docs/en/permissions)).
 Now that you write the scope, telling a too-broad setting from a too-narrow one is up to you.
-
-perm-balance turns the position above directly into its rules.
 
 ## Who it is for
 
